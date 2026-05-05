@@ -1,0 +1,63 @@
+Petr Novák
+Backend Developer & Python Architect
+Praha, Česká republika
+petr.novak@email.cz | +420 777 123 456
+LinkedIn: linkedin.com/in/petr-novak-dev
+
+PROFESNÍ PROFIL
+
+Zkušený backend developer s 8 lety praxe v oblasti vývoje webových aplikací a distribuovaných systémů. Specializuji se na Python a Ruby, s důrazem na škálovatelnou architekturu a čistý kód. Prošel jsem celou škálou projektů od startupů po enterprise, vždy s focus na výkon a udržitelnost. Aktuálně pracuji jako senior engineer v e-commerce prostředí, kde zodpovídám za design API a mentoring juniorního týmu.
+
+PRACOVNÍ ZKUŠENOSTI
+
+Senior Backend Developer — Rohlik Group, Praha
+Leden 2021 – dosud (5 let)
+- Návrh a implementace mikroservis v Pythonu (FastAPI, asyncio) obsluhujících 200 000+ denních transakcí
+- Migrace monolitické aplikace na event-driven architekturu (Kafka, Redis Streams)
+- Zavedení gRPC komunikace mezi interními službami, snížení latence o 40 %
+- Code review a mentoring 4 junior developerů
+- Zodpovědnost za CI/CD pipeline (GitHub Actions, Docker, Kubernetes)
+- Technologie: Python 3.11, FastAPI, PostgreSQL, Redis, Kafka, Docker, Kubernetes, Terraform
+
+Backend Developer — Productboard, Praha
+Červen 2018 – Prosinec 2020 (2,5 roku)
+- Vývoj REST API v Ruby on Rails pro SaaS produktový management nástroj
+- Optimalizace databázových dotazů (PostgreSQL), snížení průměrné doby odpovědi z 800 ms na 120 ms
+- Implementace OAuth 2.0 a SAML SSO pro enterprise zákazníky
+- Spolupráce s frontend týmem na GraphQL schématu
+- Technologie: Ruby on Rails, PostgreSQL, Elasticsearch, Sidekiq, AWS S3
+
+Junior Developer — Socialbakers (nyní Emplifi), Praha
+Září 2016 – Květen 2018 (1,75 roku)
+- Vývoj datových pipeline pro zpracování sociálně-mediálních metrik (Python, Celery)
+- Údržba a rozšiřování legacy Ruby aplikací
+- Psaní unit testů a integračních testů (RSpec, pytest)
+- Technologie: Python 2/3, Ruby, Celery, MySQL, MongoDB
+
+VZDĚLÁNÍ
+
+Bc. Informatika — České vysoké učení technické v Praze (ČVUT FIT)
+2013–2016, Praha
+Bakalářská práce: Analýza výkonu distribuovaných systémů
+
+TECHNICKÉ DOVEDNOSTI
+
+Programovací jazyky: Python (expert, 8 let), Ruby (advanced, 4 roky), Go (intermediate, 1 rok), SQL
+Frameworky: FastAPI (expert), Ruby on Rails (advanced), Django (intermediate)
+Databáze: PostgreSQL (expert), Redis (advanced), Elasticsearch (intermediate), MongoDB (basic)
+Infrastruktura: Docker, Kubernetes, Terraform, GitHub Actions, AWS (EC2, S3, RDS)
+Architektura: Mikroservisy, event-driven, REST API, gRPC, GraphQL
+Monitoring: Prometheus, Grafana, Sentry, Datadog
+Soft skills: mentoring, code review, technická dokumentace, agilní metodiky (Scrum, Kanban)
+
+JAZYKY
+
+Čeština — rodilý mluvčí
+Angličtina — C1 (profesionální)
+Němčina — A2 (základní)
+
+CERTIFIKÁTY & KURZY
+
+AWS Certified Developer – Associate (2022)
+Kubernetes CKA — v přípravě (2024)
+Python Design Patterns — Udemy (2020)
