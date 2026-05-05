@@ -1,0 +1,25 @@
+.env
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+tests/fixtures/*.pdf
+tests/fixtures/*.docx
+# Exception: real-world fixture is author's actual CV, not regenerable from
+# scripts/generate_fixtures.py. Must be tracked for reproducible eval.
+!tests/fixtures/cv_real_world.pdf
+*.html
+.python-version
+dist/
+*.egg-info/
+.coverage
+data/.cost_log.jsonl
+data/salary_cache/*.json
+!data/salary_cache/.gitkeep
+data/ispv_2025.xlsx
+# Internal dev artifacts — do not track
+tasks/
+decisions/
+state/
+BLOCKERS.md
+POSTMORTEM.md
