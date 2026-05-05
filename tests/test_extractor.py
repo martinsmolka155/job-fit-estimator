@@ -100,6 +100,34 @@ class TestExtractPDF:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+    def test_minimal_legit_cv_is_not_flagged_as_scanned(self) -> None:
+        """A short but legitimate one-page CV (~80 chars) must NOT be flagged as scanned.
+
+        Regression for the previous _MIN_DIGITAL_CHARS=200 threshold which
+        incorrectly rejected sparse digital PDFs (e.g. a junior CV with
+        name + contact + one role).
+        """
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        try:
+            # Approximately 80 readable characters — enough to identify a candidate,
+            # would have been rejected by the previous 200-char threshold.
+            _create_digital_pdf(
+                tmp_path,
+                content="Jan Novák\nPython developer\nPraha, 2024-Present\nSkills: Python, SQL\n",
+            )
+            result = extract_text(tmp_path)
+
+            assert result.is_scanned is False, (
+                f"Sparse but legitimate CV must not be flagged as scanned "
+                f"(extracted {result.char_count} chars)"
+            )
+            assert result.extraction_method == "pymupdf"
+            assert result.char_count >= 30
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
 
 class TestExtractDOCX:
     def test_docx_returns_text(self) -> None:

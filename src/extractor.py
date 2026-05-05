@@ -16,8 +16,11 @@ from src.schemas import ExtractedDocument
 
 logger = logging.getLogger(__name__)
 
-# Minimum characters to consider a PDF as digital (not scanned)
-_MIN_DIGITAL_CHARS = 200
+# Below this character count we treat the PDF as scanned (no extractable text).
+# Set low — pymupdf returns essentially zero chars on a true scan; legitimate
+# digital CVs can be terse (50-100 chars on a one-page minimal CV).
+# The gibberish detector below is the secondary filter for noisy OCR-like output.
+_MIN_DIGITAL_CHARS = 30
 
 # Maximum ratio of non-alphanumeric, non-space characters before classifying as gibberish
 _GIBBERISH_THRESHOLD = 0.30

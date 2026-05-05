@@ -13,6 +13,7 @@ import logging
 import math
 import re
 import unicodedata
+from datetime import UTC, datetime
 from typing import Any
 
 from src.llm_provider import LLMProvider
@@ -34,8 +35,22 @@ def _normalize(text: str) -> str:
 
 
 def _is_in_text(needle: str, haystack: str) -> bool:
-    """Return True if needle is a substring of haystack (after normalization of both)."""
-    return _normalize(needle) in _normalize(haystack)
+    """Return True if needle appears in haystack (after normalization of both).
+
+    Short tokens (≤ 3 chars) require a word-boundary match to avoid false
+    positives where a single letter happens to occur inside any longer word
+    (e.g. "R" inside "Senior", "Go" inside "Google", "C" inside "Project").
+    Longer tokens fall back to plain substring containment, which tolerates
+    embeddings such as "PostgreSQL" inside "Senior PostgreSQL DBA".
+    """
+    needle_n = _normalize(needle)
+    haystack_n = _normalize(haystack)
+    if not needle_n:
+        return True
+    if len(needle_n) <= 3:
+        # Word-boundary match. re.escape covers special regex chars (e.g. "C++").
+        return re.search(rf"(?<!\w){re.escape(needle_n)}(?!\w)", haystack_n) is not None
+    return needle_n in haystack_n
 
 
 class ResumeValidator:
@@ -140,7 +155,22 @@ class ResumeValidator:
                 )
 
         # --- Cross-check: unrealistic total years ---
-        total_years = sum((exp.end_year or 2026) - exp.start_year for exp in resume.experiences)
+        # Merge overlapping intervals so parallel HPP + freelance roles don't
+        # double-count, and compute "ongoing" against today's year (not a
+        # hard-coded constant that decays as time passes).
+        current_year = datetime.now(UTC).year
+        intervals = sorted(
+            (exp.start_year, exp.end_year or current_year)
+            for exp in resume.experiences
+            if (exp.end_year or current_year) > exp.start_year
+        )
+        merged: list[tuple[int, int]] = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        total_years = sum(end - start for start, end in merged)
         # Heuristic: if total experience years > raw_text_length / 100, something's off
         if resume.raw_text_length > 0 and total_years > resume.raw_text_length / 100:
             flags.append(

@@ -7,12 +7,20 @@ Contractor exception: no job-hopping penalty for profiles with any is_contractor
 
 from __future__ import annotations
 
-import datetime
 from collections import Counter
+from datetime import UTC, datetime
 
 from src.schemas import Experience, Resume, ScoreComponent, SeniorityScore
 
-_CURRENT_YEAR = datetime.datetime.now().year
+
+def _current_year() -> int:
+    """Return the current calendar year (UTC).
+
+    Computed per-call rather than captured at import time so a long-running
+    process doesn't freeze the "ongoing" reference point at startup.
+    """
+    return datetime.now(UTC).year
+
 
 # Component weights — MUST sum to 1.0
 _WEIGHT_EXPERIENCE = 0.40
@@ -134,10 +142,11 @@ class ExperienceComponent:
         # Merge overlapping intervals before summing — parallel roles
         # (e.g. main HPP + side freelance covering the same period) must not
         # double-count toward total years of experience.
+        current = _current_year()
         intervals: list[tuple[int, int]] = sorted(
-            (exp.start_year, exp.end_year or _CURRENT_YEAR)
+            (exp.start_year, exp.end_year or current)
             for exp in resume.experiences
-            if (exp.end_year or _CURRENT_YEAR) > exp.start_year
+            if (exp.end_year or current) > exp.start_year
         )
         merged: list[tuple[int, int]] = []
         for start, end in intervals:

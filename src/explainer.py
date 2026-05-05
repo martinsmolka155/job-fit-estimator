@@ -8,6 +8,7 @@ Prompt lives in prompts/explainer_system.txt — no inline prompts here.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,28 @@ MAX_RETRIES = 3  # hardcap — no infinite loop
 
 _PROMPT_PATH = Path("prompts/explainer_system.txt")
 _MIN_TOTAL_IMPACT_PCT = 30.0
+
+
+def _total_experience_years(resume: Resume) -> int:
+    """Total years of experience with overlapping intervals merged.
+
+    Parallel roles (e.g. main HPP + side freelance covering the same period)
+    must not double-count. "Ongoing" roles (end_year is None) are evaluated
+    against the current calendar year so the count stays correct over time.
+    """
+    current_year = datetime.now(UTC).year
+    intervals = sorted(
+        (exp.start_year, exp.end_year or current_year)
+        for exp in resume.experiences
+        if (exp.end_year or current_year) > exp.start_year
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return sum(end - start for start, end in merged)
 
 
 class Explainer:
@@ -53,7 +76,7 @@ class Explainer:
         candidate_summary = (
             f"Name: {resume.full_name or 'Unknown'}\n"
             f"Location: {resume.location or 'Not specified'}\n"
-            f"Total experience: {sum((e.end_year or 2026) - e.start_year for e in resume.experiences)} years\n"
+            f"Total experience: {_total_experience_years(resume)} years\n"
             f"Skills: {', '.join(s.name for s in resume.skills[:20])}\n"
             f"Most recent role: {resume.experiences[0].role_title if resume.experiences else 'N/A'}\n"
             f"Seniority score: {score.total:.1f}/100 (confidence: {score.confidence:.0%})\n"

@@ -578,7 +578,7 @@ def main() -> None:
         '<p style="color:#6B7280;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:0;">Výsledky analýzy</p>',
         unsafe_allow_html=True,
     )
-    display_name = result.resume.full_name or "Unknown"
+    display_name = html.escape(result.resume.full_name or "Unknown")
     st.markdown(
         f'<h1 style="font-size:36px;font-weight:600;color:#0F172A;margin-top:0;margin-bottom:24px;">{display_name}</h1>',
         unsafe_allow_html=True,
