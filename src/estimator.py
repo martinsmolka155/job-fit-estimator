@@ -1,0 +1,265 @@
+"""Salary estimator — ISPV-backed implementation.
+
+Produces SalaryEstimate (CZK range) from Resume + SeniorityScore using
+ISPV M8r 2025 dataset via ISPVLoader. Hard error if ISPV data is not loaded
+or no ISCO code is present — no silent fallback per project decision Q4 2026.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+
+from src.salary_ispv import ISPVLoader, ISPVLookupError
+from src.schemas import Resume, SalaryBand, SalaryData, SalaryEstimate, SeniorityScore
+
+logger = logging.getLogger(__name__)
+
+# Location multipliers applied on top of ISPV national bands.
+# ISPV M8r is country-wide aggregate; Praha pays ~24% above national median,
+# regional CZ pays 10-25% below. Praha as primary uplift, Brno near national,
+# regional significantly below. Keys are lowercase substrings matched against location.
+_LOCATION_MULTIPLIERS: dict[str, tuple[float, str]] = {
+    "praha": (1.15, "Praha multiplier"),
+    "prague": (1.15, "Praha multiplier"),
+    "brno": (1.00, "Brno multiplier"),  # Brno IT ~10% below Praha, near national
+    "ostrava": (0.85, "Ostrava regional multiplier"),
+    "olomouc": (0.85, "Olomouc regional multiplier"),
+    "zlín": (0.85, "Zlín regional multiplier"),
+    "zlin": (0.85, "Zlín regional multiplier"),
+    "liberec": (0.85, "Liberec regional multiplier"),
+    "plzeň": (0.88, "Plzeň regional multiplier"),
+    "plzen": (0.88, "Plzeň regional multiplier"),
+    "pardubice": (0.85, "Pardubice regional multiplier"),
+    "hradec králové": (0.85, "Hradec Králové regional multiplier"),
+    "hradec kralove": (0.85, "Hradec Králové regional multiplier"),
+    "české budějovice": (0.85, "České Budějovice regional multiplier"),
+    "ceske budejovice": (0.85, "České Budějovice regional multiplier"),
+    "jihlava": (0.80, "Jihlava regional multiplier"),
+    "karviná": (0.78, "Karviná regional multiplier"),
+    "karvina": (0.78, "Karviná regional multiplier"),
+    "most": (0.78, "Most regional multiplier"),
+    "teplice": (0.80, "Teplice regional multiplier"),
+}
+
+# Czech location regex — word-boundary match avoids false positives like
+# "Szczecin" (contains "cz" as substring). Plain "remote" alone implies CZ
+# employer; combined non-CZ country indicators override (see _NON_CZ_COUNTRIES_RE).
+_CZ_LOCATION_RE = re.compile(
+    r"\b("
+    r"praha|prague|brno|ostrava|plzeň|plzen|liberec|olomouc|"
+    r"české budějovice|ceske budejovice|hradec králové|hradec kralove|"
+    r"pardubice|zlín|zlin|jihlava|opava|frýdek|frydek|karviná|karvina|"
+    r"most|teplice|kladno|"
+    r"česká republika|czech republic|czech|cz|czechia|"
+    r"remote|vzdálený"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Non-CZ country/city indicators — if any matches, location is treated as non-CZ
+# even when "remote" or "czech" also appears (e.g. "Remote US", "Czech expat in Berlin").
+_NON_CZ_COUNTRIES_RE = re.compile(
+    r"\b("
+    # Germany
+    r"germany|german|deutschland|berlin|hamburg|münchen|munchen|munich|frankfurt|cologne|"
+    # Poland
+    r"poland|polish|polska|warsaw|warszawa|szczecin|kraków|krakow|wrocław|wroclaw|"
+    # Slovakia
+    r"slovakia|slovak|slovensko|bratislava|košice|kosice|"
+    # Austria
+    r"austria|österreich|vienna|wien|salzburg|graz|"
+    # UK / Ireland
+    r"uk|united kingdom|england|britain|london|manchester|edinburgh|ireland|dublin|"
+    # USA
+    r"usa|us|u\.s\.a|united states|america|new york|san francisco|los angeles|chicago|"
+    # Other EU
+    r"france|paris|spain|españa|madrid|barcelona|italy|italia|rome|roma|milano|"
+    r"netherlands|nederland|amsterdam|rotterdam|"
+    r"belgium|brussels|switzerland|zürich|zurich|"
+    r"sweden|stockholm|denmark|copenhagen|norway|oslo|finland|helsinki|"
+    r"hungary|budapest|romania|bucharest|"
+    # Asia/elsewhere
+    r"india|china|japan|tokyo|singapore|dubai|israel|tel aviv"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _score_to_seniority(total: float) -> str:
+    """Map SeniorityScore.total (0-100) to salary band name."""
+    if total < 30:
+        return "junior"
+    elif total < 60:
+        return "medior"
+    elif total < 80:
+        return "senior"
+    elif total < 92:
+        return "lead"
+    else:
+        return "principal"
+
+
+class SalaryEstimator:
+    """Estimates monthly gross salary (CZK) from Resume + SeniorityScore.
+
+    Requires a loaded ISPVLoader instance. Raises ISPVLookupError if ISPV data
+    is unavailable or the resume contains no ISCO code — hard fail, no silent fallback.
+    """
+
+    def __init__(self, ispv_loader: ISPVLoader | None = None) -> None:
+        self._loader = ispv_loader
+        self._last_salary_source: str = "ispv" if ispv_loader else "generic_fallback"
+        self._last_salary_data: SalaryData | None = None
+
+    @property
+    def last_salary_source(self) -> str:
+        """Label for the data source used in the most recent estimate() call."""
+        return self._last_salary_source
+
+    @property
+    def last_salary_data(self) -> SalaryData | None:
+        """SalaryData from the most recent estimate() call, or None."""
+        return self._last_salary_data
+
+    def _is_non_cz_location(self, resume: Resume) -> bool:
+        """Return True if location is clearly non-CZ.
+
+        Uses word-boundary regex matching:
+        - Empty/None location → assume CZ (don't block).
+        - Non-CZ country indicator present → non-CZ even if "remote" or CZ token also present
+          (e.g. "Remote US", "Czech expat in Berlin").
+        - CZ token present (Praha, Brno, "remote" alone, etc.) → CZ.
+        - Otherwise (e.g. "Berlin", "London", unknown city without CZ token) → non-CZ.
+        """
+        location = (resume.location or "").strip()
+        if not location:
+            return False
+        if _NON_CZ_COUNTRIES_RE.search(location):
+            return True
+        return _CZ_LOCATION_RE.search(location) is None
+
+    def _detect_location_multiplier(self, resume: Resume) -> float:
+        """Return a location multiplier based on resume.location string."""
+        location = (resume.location or "").lower()
+        for keyword, (mult, _label) in _LOCATION_MULTIPLIERS.items():
+            if keyword in location:
+                return mult
+        if "remote" in location and ("eu" in location or "europe" in location):
+            return 1.10
+        if "remote" in location and ("us" in location or "usa" in location):
+            return 1.25
+        return 1.0
+
+    def _has_management(self, resume: Resume) -> bool:
+        """Return True if any experience has is_management=True."""
+        return any(exp.is_management for exp in resume.experiences)
+
+    def estimate(self, resume: Resume, score: SeniorityScore) -> SalaryEstimate:
+        """Produce a salary estimate backed by ISPV M8r 2025 data.
+
+        Args:
+            resume: Structured resume with ISCO codes on experience entries.
+            score:  Seniority score used to select the salary band.
+
+        Returns:
+            SalaryEstimate with low/mid/high CZK values.
+
+        Raises:
+            ISPVLookupError: If ISPV data is not loaded, no ISCO code found,
+                             or ISCO lookup fails at all fallback levels.
+        """
+        seniority = _score_to_seniority(score.total)
+
+        if self._is_non_cz_location(resume):
+            raise ISPVLookupError(
+                f"Salary estimate je dostupný pouze pro CZ trh. "
+                f"Detekovaná lokace: {resume.location!r}. "
+                "ISPV data pokrývají pouze českou mzdovou sféru."
+            )
+
+        # Pick ISCO code from the most recent experience entry that has one.
+        isco_code: str | None = None
+        for exp in sorted(resume.experiences, key=lambda e: e.start_year, reverse=True):
+            if exp.isco_code:
+                isco_code = exp.isco_code
+                break
+
+        if self._loader is None or not self._loader.is_loaded():
+            raise ISPVLookupError(
+                "ISPV data not loaded. Download ISPV dataset via /admin page first."
+            )
+        if not isco_code:
+            raise ISPVLookupError("No ISCO code detected in CV experiences.")
+
+        # Whitelist check — if isco_code is absent from ISPV index, attempt family fallback.
+        known = self._loader.known_codes()
+        if isco_code not in known:
+            logger.warning(
+                "ISCO %s not in ISPV whitelist (%d known codes) — falling back via occupation_family",
+                isco_code,
+                len(known),
+            )
+            family: str | None = None
+            for exp in sorted(resume.experiences, key=lambda e: e.start_year, reverse=True):
+                if exp.isco_code == isco_code and exp.occupation_family:
+                    family = exp.occupation_family
+                    break
+            if family is None:
+                raise ISPVLookupError(
+                    f"ISCO {isco_code!r} not in ISPV dataset and no occupation_family available for fallback."
+                )
+            fallback_code = self._loader.best_code_for_family(family)
+            if fallback_code is None:
+                raise ISPVLookupError(f"No ISPV data for occupation_family {family!r}.")
+            isco_code = fallback_code
+
+        try:
+            salary_data = self._loader.lookup(isco_code)
+        except ISPVLookupError:
+            logger.exception("ISPV lookup failed for ISCO %s", isco_code)
+            raise  # hard error — no silent fallback
+
+        self._last_salary_data = salary_data
+        self._last_salary_source = "ispv"
+
+        band: SalaryBand | None = getattr(salary_data, seniority, None)
+        if band is None:
+            # Paranoid fallback within the resolved salary_data object itself.
+            band = salary_data.medior
+        if band is None:
+            # ISPVLoader always populates at least medior — if somehow still None, hard fail.
+            raise ISPVLookupError(
+                f"No salary band data available for ISCO {isco_code} at seniority {seniority!r}"
+            )
+
+        location_mult = self._detect_location_multiplier(resume)
+        # 1.10 fits team lead roles (the bulk of is_management=True cases) without
+        # overestimating full engineering managers / directors. Tier-based multiplier
+        # (lead vs manager vs director) is a known backlog item.
+        management_mult = 1.10 if self._has_management(resume) else 1.0
+
+        low = round(band.low * location_mult * management_mult / 1000) * 1000
+        mid = round(band.mid * location_mult * management_mult / 1000) * 1000
+        high = round(band.high * location_mult * management_mult / 1000) * 1000
+
+        reasoning = (
+            f"Zdroj: ISPV M8r 2025 (ISCO {salary_data.isco_code}, "
+            f"{salary_data.isco_match_level}) | {seniority} band | "
+            f"location × {location_mult:.2f} | mgmt × {management_mult:.2f}"
+        )
+
+        return SalaryEstimate(
+            currency="CZK",
+            low=low,
+            mid=mid,
+            high=high,
+            reasoning=reasoning,
+            assumptions=[
+                f"Seniority band: {seniority} (score {score.total:.1f})",
+                f"ISCO code: {salary_data.isco_code} ({salary_data.isco_match_level})",
+                f"Location multiplier: × {location_mult:.2f}",
+                f"Management multiplier: × {management_mult:.2f}",
+                f"Dataset: {salary_data.source_dataset_version}",
+            ],
+        )

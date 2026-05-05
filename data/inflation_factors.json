@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "description": "Annual wage inflation multipliers per occupation family. Applied compoundly to ISPV 2025 data (published March 2026) as factor^(age_months/12).",
+    "sources": [
+      "https://csu.gov.cz/rychle-informace/prumerne-mzdy-4-ctvrtleti-2025",
+      "https://csu.gov.cz/rychle-informace/prumerne-mzdy-3-ctvrtleti-2025",
+      "https://csu.gov.cz/rychle-informace/prumerne-mzdy-2-ctvrtleti-2025",
+      "https://csu.gov.cz/rychle-informace/prumerne-mzdy-1-ctvrtleti-2025",
+      "https://www.hays.cz/en/salary-guide",
+      "https://www.hays.cz/en/salary-guide/sector-overviews",
+      "https://recruitersdiary.cz/en/blog/21-current-salary-trends-in-it-czech-republic/",
+      "https://english.radio.cz/government-decide-salary-increase-plans-give-teachers-7-increase-and-others-1400-8837391",
+      "https://www.expats.cz/czech-news/article/salary-leaders-czechia-s-best-paying-industries-and-locations"
+    ],
+    "methodology": "Per-family annual wage growth derived from ČSÚ quarterly CZ-NACE sectoral data (2025) cross-referenced with Hays CZ salary guide and sector-specific sources. IT inflated more aggressively due to AI/cloud premium confirmed across Q1-Q4 2025 (CZ-NACE J+M averaged ~11-12% YoY). Healthcare sourced from ČSÚ Q2 data and Expats.cz reporting a confirmed +10% government-backed increase. Education sourced from government-mandated +7% tariff increase for teachers effective January 2025 (Radio Prague International). Trades based on ČSÚ construction sector: Q2 +11%, Q3 +9.5% — using conservative mid of subset. Services based on ČSÚ 'other activities' and accommodation/food: 3.4-5% range — conservative floor. Legal has no dedicated ČSÚ series; estimated from SalaryExpert +18%/5yr projection (~3.4% p.a.) blended with professional-services umbrella (~7% average) → conservative 1.05. Conservative baseline for unknown families: ČNB headline nominal wage inflation 2025 = 7.2%, deflated for MVP conservatism to 1.04.",
+    "last_updated": "2026-05-05",
+    "confidence_per_family": {
+      "it": "high (ČSÚ CZ-NACE J+M Q1-Q4 2025 consistent 10-12% YoY; Hays CZ guide confirms IT as top performer; Recruiter's Diary CZ IT data corroborates)",
+      "healthcare": "medium-high (ČSÚ Q2 2025 sectoral data + Expats.cz confirmed +10% median jump; government-backed increases give structural support)",
+      "legal": "low-medium (no dedicated ČSÚ series for legal; estimated from professional-services umbrella + SalaryExpert growth projection; high variance between Big Law and SME firms)",
+      "education": "high (government-mandated +7% tariff increase for teachers effective 2025-01-01 confirmed by Radio Prague International; state tariff tables are authoritative)",
+      "trades": "medium (ČSÚ construction Q2-Q3 2025: +9.5-11%; broader trades including electrical/metalwork have similar but slightly lower growth; conservative mid applied)",
+      "services": "low (ČSÚ 'other activities' 3.4-5% represents low end; accommodation and food services not separately broken out; high variance within category)",
+      "other": "low (fallback to conservative fraction of ČNB headline nominal wage inflation 2025 = 7.2%)"
+    }
+  },
+  "it": 1.08,
+  "healthcare": 1.07,
+  "legal": 1.05,
+  "education": 1.05,
+  "trades": 1.06,
+  "services": 1.04,
+  "other": 1.04
+}
