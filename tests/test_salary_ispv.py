@@ -641,3 +641,27 @@ def test_family_fallback_uses_highest_pocet(tmp_path: Path) -> None:
     assert result.isco_match_level == "family_fallback"
     # Must pick 1111 (pocet=200), not 1120 (pocet=50)
     assert result.isco_code == "1111"
+
+
+def test_prefix_fallback_picks_highest_pocet(tmp_path: Path) -> None:
+    """3-digit prefix fallback must pick the highest-POCET match, not the first row in the XLSX.
+
+    Regression for arbitrary-order behavior in earlier _find_prefix() implementation.
+    Prefix '311' has two candidates: 3111 with low POCET and 3115 with high POCET.
+    Lookup of '3119' (absent) must fall back to 3115 (the dominant code), not 3111.
+    """
+    path = _m8r_workbook(
+        tmp_path,
+        [
+            # Row order matters: 3111 appears FIRST in the XLSX but has lower POCET.
+            ["3111 Few-respondent code", 0.004, 50000, 30000, 40000, 60000, 75000, 52000],
+            ["3115 High-POCET code", 0.049, 60000, 35000, 48000, 72000, 90000, 62000],
+        ],
+    )
+    loader = _make_loader(path)
+
+    result = loader.lookup("3119")  # not present, must fall back via prefix
+    assert result.isco_match_level == "3digit"
+    assert result.isco_code == "3115", (
+        f"Expected highest-POCET fallback to 3115, got {result.isco_code}"
+    )

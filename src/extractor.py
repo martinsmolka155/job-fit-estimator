@@ -42,7 +42,10 @@ def _is_gibberish(text: str) -> bool:
 def _extract_pdf(file_path: Path) -> ExtractedDocument:
     """Extract text from a digital PDF using pymupdf4llm."""
     try:
-        text = pymupdf4llm.to_markdown(str(file_path))
+        # to_markdown() can return either a single str or a list of dict pages
+        # depending on call signature; we always coerce to str for downstream use.
+        raw = pymupdf4llm.to_markdown(str(file_path))
+        text = raw if isinstance(raw, str) else "\n\n".join(p.get("text", "") for p in raw)
     except Exception:
         logger.exception("pymupdf4llm failed to extract text from %s", file_path)
         return ExtractedDocument(

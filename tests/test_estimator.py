@@ -71,7 +71,7 @@ def _make_resume_with_isco(
     exp = Experience(
         role_title="Software Developer",
         isco_code=isco_code,
-        occupation_family=occupation_family,
+        occupation_family=occupation_family,  # type: ignore[arg-type]
         company="Test Corp",
         start_year=2018,
         end_year=2024,
@@ -143,7 +143,7 @@ class TestSalaryEstimatorNoLoader:
         resume = _make_resume_with_isco(isco_code="2512")
         score = _make_score(70.0)
 
-        with pytest.raises(ISPVLookupError, match="ISPV data not loaded"):
+        with pytest.raises(ISPVLookupError, match="ISPV data nejsou načtená"):
             estimator.estimate(resume, score)
 
     def test_raises_when_loader_not_loaded(self) -> None:
@@ -154,7 +154,7 @@ class TestSalaryEstimatorNoLoader:
         resume = _make_resume_with_isco(isco_code="2512")
         score = _make_score(70.0)
 
-        with pytest.raises(ISPVLookupError, match="ISPV data not loaded"):
+        with pytest.raises(ISPVLookupError, match="ISPV data nejsou načtená"):
             estimator.estimate(resume, score)
 
     def test_raises_when_no_isco_code_in_resume(self) -> None:
@@ -164,7 +164,7 @@ class TestSalaryEstimatorNoLoader:
         resume = _make_resume_with_isco(isco_code=None)
         score = _make_score(70.0)
 
-        with pytest.raises(ISPVLookupError, match="No ISCO code"):
+        with pytest.raises(ISPVLookupError, match="ISCO"):
             estimator.estimate(resume, score)
 
 
@@ -567,3 +567,56 @@ class TestNonCZLocationGuard:
 
         with pytest.raises(ISPVLookupError, match="CZ trh"):
             estimator.estimate(resume, _make_score(70.0))
+
+    def test_smaller_cz_cities_pass(self) -> None:
+        """Cities outside the multiplier table (Tábor, Karlovy Vary, Mladá Boleslav)
+        must pass the location check — default is CZ unless an explicit non-CZ
+        country indicator is present.
+        """
+        loader = _make_mock_loader(_make_salary_data())
+        estimator = SalaryEstimator(ispv_loader=loader)
+        for city in ("Tábor", "Karlovy Vary", "Mladá Boleslav", "Náchod"):
+            resume = _make_resume_with_isco(isco_code="2512", location=city)
+            result = estimator.estimate(resume, _make_score(70.0))
+            assert result.currency == "CZK", f"{city} must not be classified as non-CZ"
+
+
+class TestExperienceRecencySelection:
+    """Verify that ISCO is taken from the candidate's CURRENT primary role,
+    not whichever experience started most recently.
+    """
+
+    def test_short_side_gig_does_not_override_current_role(self) -> None:
+        """Long-running current role must beat a short side gig that started later."""
+        from src.schemas import Experience, Resume
+
+        current_main = Experience(
+            role_title="Senior Software Engineer",
+            isco_code="2512",
+            occupation_family="it",
+            company="MainCorp",
+            start_year=2020,
+            end_year=None,  # ongoing
+        )
+        short_side_gig = Experience(
+            role_title="Cook (weekend)",
+            isco_code="5120",
+            occupation_family="services",
+            company="SideRestaurant",
+            start_year=2023,
+            end_year=2024,
+        )
+        resume = Resume(
+            full_name="Test",
+            location=None,
+            experiences=[current_main, short_side_gig],
+            raw_text_length=1000,
+        )
+
+        loader = _make_mock_loader(_make_salary_data(isco_code="2512"))
+        estimator = SalaryEstimator(ispv_loader=loader)
+        estimator.estimate(resume, _make_score(70.0))
+
+        # Verify the loader was queried for the current main role's ISCO (2512),
+        # not the short side gig's ISCO (5120).
+        loader.lookup.assert_called_with("2512")

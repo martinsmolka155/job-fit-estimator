@@ -1,167 +1,83 @@
 # Production Roadmap
 
-Honest documentation of what Phases 18–20 shipped and what's still missing for full production deployment. Senior engineering signal: knowing the limits.
+What is shipped in this repo, what is deliberately MVP-scope, and what one to two weeks vs. one to two months of further work would unlock. Knowing the limits is the senior signal.
 
 ---
 
-## What's done — Phases 18–20
+## What is shipped
 
-### Phase 18 — Salary data pipeline
-- `SalaryDataSource` ABC with `StaticJSONSource` (default) and `LocalCSVSource` (manual CSU.gov.cz CSV import)
-- CLI refresh command: `uv run python scripts/update_salary_data.py [--static | --csv path]`
-- Validation layer: sanity-checks band ranges (low ≤ mid ≤ high, monotonic seniority, no negatives) before write
-- `_meta.fetched_at` + `_meta.source_url` enrichment
-- Fallback wrapper: primary source → secondary source on validation/fetch failure
-
-### Phase 19 — Multi-layer hallucination detection
-- Layer 1 (existing): `ResumeValidator` normalized substring matching
-- Layer 2 (new, opt-in): `EmbeddingValidator` cosine similarity via OpenAI `text-embedding-3-small`
-- Threshold 0.65 calibrated against real measurements (ČVUT ↔ "Czech Technical University" = 0.677, ČVUT ↔ Cambridge = 0.41)
-- Pure-Python cosine implementation (no numpy dependency)
-- Pipeline integration via `enable_embedding_validator: bool = False` (default off — cost transparency)
-
-### Phase 20 — Observability + cost guardrails
-- Structured JSON logging via structlog with per-run `run_id` correlation
-- Per-run cost tracking: parse + explain + embed costs aggregated in `PipelineResult.meta.total_cost_usd`
-- Append-only cost log at `data/.cost_log.jsonl` (gitignored)
-- Daily budget cap: `DAILY_API_BUDGET_USD` env (default $5.00); raises `BudgetExceededError` BEFORE LLM calls if would exceed; warns at 90% consumption
-- CLI metrics dashboard: `uv run python scripts/show_metrics.py --last N | --today`
-
-### Phase 22 — Dynamic salary research with Tavily + caching
-- `SalaryResearcher` calls Tavily search + extracts via `gpt-5-mini` (fallback to `gpt-5`)
-- `SalaryCache` per-role with 90-day TTL on disk (`data/salary_cache/`)
-- Multi-tier fallback: cache → research → static IT defaults → generic
-- Sources cited per band, confidence scored, warnings flagged
-- UI badges show salary_source + confidence; sources expandable
-- `explainer_model` upgraded gpt-4o-mini → gpt-5-mini for better Czech
+- Six-stage pipeline: extract → parse → validate → score → estimate → explain. Per-stage `try / except`, per-run cost + duration in `PipelineResult.meta`.
+- OpenAI Structured Outputs parser with `temperature=0.0`, refusal handling, rate-limit-aware retries.
+- Hallucination guard via `ResumeValidator` — normalised substring matching against the raw CV text on every extracted entity (companies, emails, schools, skills).
+- ISPV M8r 2025 salary backend: official Czech wage statistics with five-band decile mapping, regional + management multipliers, per-occupation-family inflation correction, ISCO whitelist with POCET-based fallback.
+- Hard-fail surface for "we cannot honestly estimate this": non-CZ location, missing ISPV dataset, missing ISCO, lookup failure — each with a distinct exception subclass and surfaced as a targeted UI / HTTP message.
+- Streamlit UI with sidebar ISPV downloader (scrapes `ispv.cz`), 3 result tabs, freshness-disclosure badge, HPP/IČO + sector caveats.
+- Headless CLI (`main.py`) and FastAPI endpoint (`api.py`) for integration outside the UI.
+- 160 pytest tests + 4 golden-set ISCO classification tests gated behind `OPENAI_API_KEY` (live LLM). Coverage 66 %.
 
 ---
 
-## What's still MVP
+## Known MVP gaps
 
-These are knowable limits — documented, not hidden.
+These are documented, not hidden.
 
-### Eval coverage
-- **Current:** 6 fixtures (5 synthetic + 1 real-world)
-- **Production:** 100+ real anonymized CVs with human-labeled ground truth scores and salary expectations
-- **Why MVP:** statistical claims about precision/recall require larger sample. 6 fixtures verify "no crash + within plausibility" not "scoring accuracy."
-
-### Salary data ground truth
-- **Current:** dynamic Tavily search + `gpt-5-mini` extraction, 90-day disk cache, static IT fallback. Per-role on-demand; first run pays research cost (~$0.005-$0.02), subsequent runs free from cache.
-- **Production:** multi-source consensus (multiple search providers), automated refresh of stale cache, NACE/ISCO code mapping for CSU.gov.cz integration, regional breakdowns (Praha/Brno/Olomouc), per-industry adjustments.
-- **Why MVP:** Tavily free tier (1000 credits/month) sufficient for demo + early production. Multi-source consensus and regional/industry breakdowns add complexity that doesn't serve the demo narrative.
-
-### Schema versioning
-- **Current:** `src/schemas.py` invariant-frozen, no migration tests
-- **Production:** schema version field + backward-compat migration helpers + serialized fixture corpus per version
-- **Why MVP:** single-version deployment, no historical data to migrate
-
-### Auth / multi-tenant / rate limits
-- **Current:** single-user demo, no authentication
-- **Production:** OAuth + API keys + rate limits per tenant + audit logging of CV uploads (PII)
-- **Why MVP:** scope explicitly excluded; demo runs locally
-
-### GDPR compliance
-- **Current:** CV uploads ephemeral (temp file deleted after pipeline run); no persistence
-- **Production:** explicit consent flow, right-to-erasure, data residency disclosure, DPA with OpenAI
-- **Why MVP:** scope explicitly excluded; CV data not persisted
+| Gap | Production-grade direction |
+|---|---|
+| **Sector tier not modeled** — banking / FAANG / agency / govt can shift estimates by ±15 % vs ISPV national bands | Curated company-tier dictionary (top 100 CZ employers) + parser-detected `Experience.company_tier` field, surfaced as a multiplier alongside region and management |
+| **HPP-only output** — UI badge documents the IČO equivalent (~×1.4–1.6) but no toggle | Dual output (HPP + IČO equivalent) with explicit toggle. Requires schema field + UI rework |
+| **Sample suppression** — narrow ISCO codes with low POCET fall back to broader prefixes; selection is highest-POCET in the prefix group | Multi-source merge (ISPV + Hays + LinkedIn surveys) to fill thin cells before ISPV publishes |
+| **Lead / principal extrapolation** — bands above D9 are documented multipliers (×1.10–×1.75), not measured | Custom senior-comp survey across CZ tech (~50 respondents per family) calibrating the extrapolation curve |
+| **Data lag** — ISPV releases the previous full year in March (≈ 2-month lag). Inflation correction compounds per-month from publication | Half-year revision import + sector-specific lag adjustments (tech moves faster than baseline ČNB inflation captures) |
+| **No OCR** — scanned PDFs return a clean error | Tesseract + post-processing pipeline with quality scoring; OCR'd text routed through the same parser |
+| **Eval coverage** — 4 synthetic CV fixtures across IT / healthcare / services + 1 real-world CV | 100+ anonymised real CVs across seniority levels and industries, with human-labelled ground truth scores and salary expectations |
+| **`pipeline.py` integration coverage** — 0 % unit coverage; tested only via end-to-end runs | Mock-LLM + mock-ISPV integration tests covering each step's error path |
+| **No multi-tenant / auth** — single-user demo | OAuth + per-tenant rate limits + audit logging of CV uploads (PII handling) |
+| **No GDPR compliance audit** — temp-file ephemeral storage, no consent flow | Right-to-erasure, data residency, DPA with OpenAI (zero-data-retention path), ÚOOÚ documentation |
 
 ---
 
-## What would need 1–2 weeks
+## What 1–2 weeks of work would unlock
 
-### Continuous eval pipeline (drift detection)
-- Nightly run against eval corpus
-- Alert on score drift > 5% from baseline
-- Confusion matrix tracking for role classification
-
-### A/B prompt testing infrastructure
-- Versioned prompts in `prompts/` with explicit `prompt_version` field
-- Side-by-side eval comparing two versions
-- Statistical significance test before promoting v2 → v1
-
-### Real-CV regression suite
-- Anonymized CV donations from collaborators (with consent)
-- 20–50 real CVs across seniority levels + industries
-- Run on every PR; alert on new validation flag patterns
-
-### Multi-language output toggle
-- Currently CS-only output (Phase 17)
-- Add `OUTPUT_LANGUAGE=cs|en|de|sk` env or per-request param
-- Translate UI chrome similarly
-
-### Salary research multi-source consensus
-- Pluggable `SearchProvider` ABC with implementations for Tavily, SerpAPI, Bing
-- Consensus algorithm: agree across ≥2 providers within ±15% before flagging high confidence
-- Detect outliers and exclude (e.g., one source citing $80k USD for backend in Olomouc)
-
-### Cache management UI
-- Streamlit panel for "Browse cached roles" with researched_at + confidence
-- "Force refresh" button per role
-- Bulk-expire stale cache (older than X days)
+- **Sector-tier multiplier.** Curate a CZ company-tier list (~100 firms covering banking, FAANG-CZ, scale-up agencies, government), add `Experience.company_tier` to the parser prompt, apply as an additional multiplier in the estimator. Closes the largest documented calibration gap.
+- **Real-CV regression suite.** Solicit 20–50 anonymised CV donations across families. Run on every commit; alert on validation-flag pattern shifts.
+- **Continuous eval.** Nightly run against the eval corpus. Track score drift and ISCO classification confusion matrix. Alert on > 5 % drift.
+- **Multi-language output.** Currently CS-only output. Add `OUTPUT_LANGUAGE` env or per-request param; localise the UI chrome to match.
+- **Pipeline integration tests.** Mock LLM + mock ISPVLoader; cover the exception-propagation paths that are currently exercised only by manual UI runs.
+- **A/B prompt testing.** Versioned prompts, side-by-side eval, statistical significance check before promotion.
 
 ---
 
-## What would need 1–2 months
+## What 1–2 months of work would unlock
 
-### Production deployment infrastructure
-- Containerization (already have Dockerfile/docker-compose for dev)
-- Auth layer (OAuth + JWT)
-- Rate limiting (Redis-backed)
-- Billing integration (Stripe metered billing keyed to OpenAI cost)
-- HA deployment (≥ 2 replicas, health checks, graceful degradation)
-- Monitoring (Grafana dashboards, PagerDuty integration)
-
-### GDPR compliance audit
-- Privacy policy + ToS legal review
-- Data Processing Agreement with OpenAI (zero data retention path)
-- Right-to-erasure implementation (CV-data hashing + audit trail)
-- Compliance documentation for Czech personal data office (ÚOOÚ)
-
-### Quality team / manual eval reviewers
-- Hire/contract 2–3 Czech-speaking reviewers
-- Eval corpus expansion (100 → 500+ labeled CVs)
-- Reviewer agreement metrics (Cohen's kappa)
-
-### Custom fine-tuned model for CZ market
-- Collect 1k+ labeled (CV, score, salary) tuples
-- Fine-tune GPT-4o-mini or open-weight base on Czech market specifics
-- A/B test fine-tuned vs zero-shot
+- **Production deployment.** Containerised, OAuth-fronted, Redis rate limits, Stripe metered billing keyed to OpenAI cost, ≥ 2 replicas behind a health check, Grafana + alerting.
+- **GDPR compliance.** Privacy policy / ToS, DPA with OpenAI, right-to-erasure, ÚOOÚ documentation.
+- **Manual eval team.** Two to three Czech-speaking reviewers, eval corpus expansion to 500+ labelled CVs, reviewer agreement metrics (Cohen's κ).
+- **Custom CZ-market model.** 1k+ labelled `(CV, score, salary)` tuples; fine-tune `gpt-4o-mini` or open-weight base; A/B against zero-shot.
 
 ---
 
-## Cost projections at scale
+## Cost at scale
 
-Baseline measurement: $0.0013 per CV (Phase 17 real-world run with cv_real_world.pdf), $0.0078 per `make eval` run (6 fixtures). All numbers via `text-embedding-3-small` for embeddings + `gpt-4o-mini` for parser+explainer.
+Baseline measurement: ≈ $0.0013 per CV (`gpt-4o-mini`, parser + explainer). Latency 3–6 s end-to-end.
 
 | Volume | Daily cost | Monthly cost | Notes |
 |---|---|---|---|
-| 10 CV/day | ~$0.013 | ~$0.40 | Trivial — well within demo budget cap |
-| 100 CV/day | ~$0.13 | ~$4 | Comfortable; current `DAILY_API_BUDGET_USD=$5` fits |
-| 1,000 CV/day | ~$1.30 | ~$40 | Bump `DAILY_API_BUDGET_USD` → $10. Add monitoring on cost trends |
-| 10,000 CV/day | ~$13 | ~$400 | Rate limit considerations: OpenAI tier-2 rate limits. Add fallback model strategy (gpt-4o-mini → gpt-3.5 on rate limit) |
-
-**Scaling concerns at 10k+ CV/day:**
-- OpenAI rate limits per tier (tier-2 ~10k RPM)
-- `data/.cost_log.jsonl` no rotation — switch to SQLite or external metrics store
-- Single-process Pipeline → need worker queue (Celery / RQ)
-- Embedding cost grows with chunk count, not just CV count — add embedding cache (Redis) keyed on chunk hash
-- structlog stderr → centralized log aggregation (Loki / Cloudwatch)
+| 10 CV/day | ~$0.013 | ~$0.40 | Within demo budget cap |
+| 100 CV/day | ~$0.13 | ~$4 | Default `DAILY_API_BUDGET_USD=$5` fits |
+| 1,000 CV/day | ~$1.30 | ~$40 | Bump cap to $10; add cost-trend monitoring |
+| 10,000 CV/day | ~$13 | ~$400 | OpenAI tier-2 rate limits relevant; add worker queue (Celery/RQ); rotate cost log to SQLite |
 
 ---
 
-## Trade-offs and explicit non-goals
+## Deliberate non-goals
 
-These are deliberate choices, not gaps:
+These are choices, not gaps.
 
-- **Rule-based scoring over ML** — transparency > accuracy for demo. ML would hide tradeoffs in opaque weights.
-- **OpenAI-only provider** — Phase 13 retired Anthropic support. ABC retained for future Ollama / local LLM. Multi-provider increases test surface and audit burden.
-- **Czech-language output default** — Phase 17 demo-driven. Toggle for other languages tracked in this roadmap (1–2 weeks).
-- **No automatic salary data refresh** — manual CSV import via CLI is intentional. Live scraping adds vendor lock and ToS risk; CSU.gov.cz semi-annual cycle fits real refresh cadence anyway.
-- **Embedding validation opt-in** — default off keeps baseline cost predictable. Operator opts in per-run via Pipeline arg.
-
----
+- **Rule-based scoring over ML** — transparency over accuracy. ML would hide tradeoffs in opaque weights.
+- **OpenAI-only provider** — `LLMProvider` ABC retained for future Ollama / local LLM. Multi-provider increases test surface for marginal MVP value.
+- **Hard fail over silent fallback** — non-CZ location, missing ISPV data, missing ISCO all raise rather than return a number we cannot defend.
+- **No automatic ISPV refresh** — manual sidebar download is intentional. ISPV publishes annually; live scraping adds ToS risk and brittleness.
 
 ---
 
-Last updated: 2026-05-05.
+Last updated: 2026-05-06.

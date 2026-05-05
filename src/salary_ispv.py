@@ -85,7 +85,23 @@ _ISCO_FAMILY: dict[str, str] = {
 
 
 class ISPVLookupError(Exception):
-    """Raised when an ISCO code cannot be resolved in the loaded dataset."""
+    """Base class for salary-estimation failures. Caught by UI/API.
+
+    Subclasses encode the specific failure mode so callers can surface a
+    targeted message (and HTTP status, in the API).
+    """
+
+
+class ISPVDataMissingError(ISPVLookupError):
+    """Raised when the ISPV dataset is not loaded or empty."""
+
+
+class NonCZLocationError(ISPVLookupError):
+    """Raised when the candidate's location is outside the CZ market."""
+
+
+class MissingISCOError(ISPVLookupError):
+    """Raised when the parsed CV contains no ISCO code on any experience."""
 
 
 # ---------------------------------------------------------------------------
@@ -360,14 +376,16 @@ class ISPVLoader:
                 skipped += 1
                 continue
 
+            # openpyxl returns _CellGetValue for read-only cells; coerce via str()
+            # before float() — strict typing-friendly and accepts ints, floats, str numerics.
             try:
-                pocet_thousands = float(raw_row[_COL_POCET])
-                median = float(raw_row[_COL_MEDIAN])
-                d1 = float(raw_row[_COL_D1])
-                q1 = float(raw_row[_COL_Q1])
-                q3 = float(raw_row[_COL_Q3])
-                d9 = float(raw_row[_COL_D9])
-                prumer = float(raw_row[_COL_PRUMER])
+                pocet_thousands = float(str(raw_row[_COL_POCET]))
+                median = float(str(raw_row[_COL_MEDIAN]))
+                d1 = float(str(raw_row[_COL_D1]))
+                q1 = float(str(raw_row[_COL_Q1]))
+                q3 = float(str(raw_row[_COL_Q3]))
+                d9 = float(str(raw_row[_COL_D9]))
+                prumer = float(str(raw_row[_COL_PRUMER]))
             except (TypeError, ValueError, IndexError):
                 logger.debug("Skipping non-numeric row for ISCO %s", isco_code)
                 skipped += 1
@@ -494,18 +512,17 @@ class ISPVLoader:
         return None, "family_fallback"
 
     def _find_prefix(self, prefix: str) -> _ISPVRow | None:
-        """Return first row whose ISCO code starts with prefix, or None.
+        """Return the highest-POCET row whose ISCO code starts with prefix, or None.
 
-        Args:
-            prefix: 1-3 character ISCO prefix string.
-
-        Returns:
-            First matching _ISPVRow or None.
+        Picking by sample size makes the fallback deterministic and selects the
+        most representative occupation in the prefix group rather than whichever
+        row happens to come first in the source XLSX.
         """
+        best: _ISPVRow | None = None
         for code, row in self._data.items():
-            if code.startswith(prefix):
-                return row
-        return None
+            if code.startswith(prefix) and (best is None or row.pocet > best.pocet):
+                best = row
+        return best
 
     def _build_salary_data(
         self,

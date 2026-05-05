@@ -20,7 +20,12 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from src.config import settings
 from src.pipeline import Pipeline
-from src.salary_ispv import ISPVLookupError
+from src.salary_ispv import (
+    ISPVDataMissingError,
+    ISPVLookupError,
+    MissingISCOError,
+    NonCZLocationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +68,14 @@ async def analyze(cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
 
     try:
         result = pipeline.run(tmp_path)
+    except ISPVDataMissingError as e:
+        # Service is not ready — operator must download the ISPV dataset.
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except (NonCZLocationError, MissingISCOError) as e:
+        # Caller-side problem with the submitted CV — refuse with a 422.
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except ISPVLookupError as e:
-        # Includes non-CZ location and missing/empty ISPV dataset cases.
+        # Other salary-lookup failures.
         raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         logger.exception("pipeline failed for %s", filename)

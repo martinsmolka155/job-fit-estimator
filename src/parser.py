@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.llm_provider import LLMProvider
 from src.schemas import Resume
@@ -72,7 +72,7 @@ class ResumeParser:
         full_prompt = f"{system_prompt}\n\n{text}"
 
         try:
-            resume, llm_meta = self.llm.extract_structured(full_prompt, Resume, max_tokens=4096)
+            raw_resume, llm_meta = self.llm.extract_structured(full_prompt, Resume, max_tokens=4096)
         except Exception:
             logger.exception("LLM parsing failed, returning empty Resume")
             resume = Resume(raw_text_length=len(text))
@@ -80,8 +80,8 @@ class ResumeParser:
             return resume, meta
 
         # Post-processing: ensure raw_text_length is set to original length
-        # (before truncation if it occurred)
-        resume = resume.model_copy(update={"raw_text_length": len(text)})
+        # (before truncation if it occurred). model_copy() preserves the concrete type.
+        resume = cast("Resume", raw_resume.model_copy(update={"raw_text_length": len(text)}))
 
         meta.update(llm_meta)
         return resume, meta

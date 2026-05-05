@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 from collections import Counter
 
-from src.schemas import Resume, ScoreComponent, SeniorityScore
+from src.schemas import Experience, Resume, ScoreComponent, SeniorityScore
 
 _CURRENT_YEAR = datetime.datetime.now().year
 
@@ -131,11 +131,21 @@ class ExperienceComponent:
                 reasoning="No experience entries found",
             )
 
-        total_years = sum(
-            (exp.end_year or _CURRENT_YEAR) - exp.start_year for exp in resume.experiences
+        # Merge overlapping intervals before summing — parallel roles
+        # (e.g. main HPP + side freelance covering the same period) must not
+        # double-count toward total years of experience.
+        intervals: list[tuple[int, int]] = sorted(
+            (exp.start_year, exp.end_year or _CURRENT_YEAR)
+            for exp in resume.experiences
+            if (exp.end_year or _CURRENT_YEAR) > exp.start_year
         )
-        # Cap negative values (bad data)
-        total_years = max(0, total_years)
+        merged: list[tuple[int, int]] = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        total_years = max(0, sum(end - start for start, end in merged))
 
         base_score = min(100.0, total_years * 8.0)  # 12.5 years → 100
 
@@ -280,9 +290,15 @@ class EducationComponent:
         )
         base_score = float(_DEGREE_SCORES.get(best_edu.degree, 0))
 
-        # Determine primary occupation_family from most recent experience that has one set.
+        # Determine primary occupation_family from the candidate's current role
+        # (ongoing jobs first, then most recent end_year, then start_year).
         primary_family: str = "other"
-        for exp in sorted(resume.experiences, key=lambda e: e.start_year, reverse=True):
+
+        def _recency_key(exp: Experience) -> tuple[int, int, int]:
+            is_current = 1 if exp.end_year is None else 0
+            return (is_current, exp.end_year or 0, exp.start_year or 0)
+
+        for exp in sorted(resume.experiences, key=_recency_key, reverse=True):
             if exp.occupation_family is not None:
                 primary_family = exp.occupation_family
                 break

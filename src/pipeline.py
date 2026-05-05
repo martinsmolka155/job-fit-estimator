@@ -308,6 +308,13 @@ class Pipeline:
             score.total,
         )
 
+        # Derive run_error from per-step status so the metrics CLI sees real failures.
+        # Initial run_error is None; we promote any step's "error" status to the
+        # top-level marker (last erroring step wins — they tend to cascade anyway).
+        for step_name, step_meta in meta["steps"].items():
+            if isinstance(step_meta, dict) and step_meta.get("status") == "error":
+                run_error = f"{step_name}_failed"
+
         # Persist cost record for budget tracking and metrics CLI
         cost_record = CostRecord(
             run_id=run_id,

@@ -10,7 +10,13 @@ from __future__ import annotations
 import logging
 import re
 
-from src.salary_ispv import ISPVLoader, ISPVLookupError
+from src.salary_ispv import (
+    ISPVDataMissingError,
+    ISPVLoader,
+    ISPVLookupError,
+    MissingISCOError,
+    NonCZLocationError,
+)
 from src.schemas import Resume, SalaryBand, SalaryData, SalaryEstimate, SeniorityScore
 
 logger = logging.getLogger(__name__)
@@ -42,23 +48,10 @@ _LOCATION_MULTIPLIERS: dict[str, tuple[float, str]] = {
     "teplice": (0.80, "Teplice regional multiplier"),
 }
 
-# Czech location regex — word-boundary match avoids false positives like
-# "Szczecin" (contains "cz" as substring). Plain "remote" alone implies CZ
-# employer; combined non-CZ country indicators override (see _NON_CZ_COUNTRIES_RE).
-_CZ_LOCATION_RE = re.compile(
-    r"\b("
-    r"praha|prague|brno|ostrava|plzeň|plzen|liberec|olomouc|"
-    r"české budějovice|ceske budejovice|hradec králové|hradec kralove|"
-    r"pardubice|zlín|zlin|jihlava|opava|frýdek|frydek|karviná|karvina|"
-    r"most|teplice|kladno|"
-    r"česká republika|czech republic|czech|cz|czechia|"
-    r"remote|vzdálený"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# Non-CZ country/city indicators — if any matches, location is treated as non-CZ
-# even when "remote" or "czech" also appears (e.g. "Remote US", "Czech expat in Berlin").
+# Non-CZ country/city indicators. Word-boundary regex so substrings like "cz"
+# don't false-match (e.g. "Szczecin"). If any token matches, location is treated
+# as non-CZ even when "remote" or "czech" also appears (e.g. "Remote US",
+# "Czech expat in Berlin").
 _NON_CZ_COUNTRIES_RE = re.compile(
     r"\b("
     # Germany
@@ -123,21 +116,18 @@ class SalaryEstimator:
         return self._last_salary_data
 
     def _is_non_cz_location(self, resume: Resume) -> bool:
-        """Return True if location is clearly non-CZ.
+        """Return True only when an explicit non-CZ country indicator is present.
 
-        Uses word-boundary regex matching:
-        - Empty/None location → assume CZ (don't block).
-        - Non-CZ country indicator present → non-CZ even if "remote" or CZ token also present
-          (e.g. "Remote US", "Czech expat in Berlin").
-        - CZ token present (Praha, Brno, "remote" alone, etc.) → CZ.
-        - Otherwise (e.g. "Berlin", "London", unknown city without CZ token) → non-CZ.
+        Default behaviour is to assume CZ — the small CZ-city whitelist used to
+        be required for "pass" classification and rejected legitimate cities
+        like Tábor, Karlovy Vary, or Mladá Boleslav. We now block only when a
+        recognised non-CZ country/city token is found (Berlin, London, Bratislava,
+        Remote US, etc.). Empty location is treated as CZ.
         """
         location = (resume.location or "").strip()
         if not location:
             return False
-        if _NON_CZ_COUNTRIES_RE.search(location):
-            return True
-        return _CZ_LOCATION_RE.search(location) is None
+        return bool(_NON_CZ_COUNTRIES_RE.search(location))
 
     def _detect_location_multiplier(self, resume: Resume) -> float:
         """Return a location multiplier based on resume.location string."""
@@ -172,25 +162,36 @@ class SalaryEstimator:
         seniority = _score_to_seniority(score.total)
 
         if self._is_non_cz_location(resume):
-            raise ISPVLookupError(
+            raise NonCZLocationError(
                 f"Salary estimate je dostupný pouze pro CZ trh. "
                 f"Detekovaná lokace: {resume.location!r}. "
                 "ISPV data pokrývají pouze českou mzdovou sféru."
             )
 
-        # Pick ISCO code from the most recent experience entry that has one.
+        # Pick ISCO from the candidate's primary current role.
+        # Sort key: ongoing role first (end_year is None), then by end_year desc,
+        # then by start_year desc (longer current tenure outranks short side gigs).
         isco_code: str | None = None
-        for exp in sorted(resume.experiences, key=lambda e: e.start_year, reverse=True):
+
+        def _recency_key(exp: object) -> tuple[int, int, int]:
+            end = getattr(exp, "end_year", None)
+            start = getattr(exp, "start_year", 0) or 0
+            is_current = 1 if end is None else 0
+            return (is_current, end or 0, start)
+
+        for exp in sorted(resume.experiences, key=_recency_key, reverse=True):
             if exp.isco_code:
                 isco_code = exp.isco_code
                 break
 
         if self._loader is None or not self._loader.is_loaded():
-            raise ISPVLookupError(
-                "ISPV data not loaded. Download ISPV dataset via /admin page first."
+            raise ISPVDataMissingError(
+                "ISPV data nejsou načtená. Stáhni dataset přes tlačítko v sidebaru."
             )
         if not isco_code:
-            raise ISPVLookupError("No ISCO code detected in CV experiences.")
+            raise MissingISCOError(
+                "Z CV se nepodařilo určit ISCO kód žádné role — parser nedetekoval profesi."
+            )
 
         # Whitelist check — if isco_code is absent from ISPV index, attempt family fallback.
         known = self._loader.known_codes()
@@ -201,7 +202,7 @@ class SalaryEstimator:
                 len(known),
             )
             family: str | None = None
-            for exp in sorted(resume.experiences, key=lambda e: e.start_year, reverse=True):
+            for exp in sorted(resume.experiences, key=_recency_key, reverse=True):
                 if exp.isco_code == isco_code and exp.occupation_family:
                     family = exp.occupation_family
                     break

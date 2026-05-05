@@ -2,10 +2,15 @@
 
 Cache: @st.cache_data receives file_bytes: bytes (from uploaded_file.getvalue()).
 NEVER pass the file object itself — its hash is unstable across re-uploads.
+
+HTML safety: all CV-derived and LLM-generated strings are passed through
+html.escape() before being interpolated into st.markdown(unsafe_allow_html=True)
+templates. CSS class wrappers stay literal in the source.
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 import tempfile
@@ -16,7 +21,12 @@ import httpx
 import streamlit as st
 
 from src.pipeline import Pipeline
-from src.salary_ispv import ISPVLookupError
+from src.salary_ispv import (
+    ISPVDataMissingError,
+    ISPVLookupError,
+    MissingISCOError,
+    NonCZLocationError,
+)
 from src.schemas import PipelineResult, SalaryData
 from ui.styles import inject_css
 
@@ -162,19 +172,19 @@ def render_profile_tab(result: PipelineResult) -> None:
     with col1:
         st.markdown('<div class="jfe-stat-label">Jméno</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div style="font-size:18px;font-weight:600;color:#111827;">{resume.full_name or "—"}</div>',
+            f'<div style="font-size:18px;font-weight:600;color:#111827;">{html.escape(resume.full_name or "—")}</div>',
             unsafe_allow_html=True,
         )
     with col2:
         st.markdown('<div class="jfe-stat-label">Lokace</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div style="font-size:18px;font-weight:600;color:#111827;">{resume.location or "—"}</div>',
+            f'<div style="font-size:18px;font-weight:600;color:#111827;">{html.escape(resume.location or "—")}</div>',
             unsafe_allow_html=True,
         )
     with col3:
         st.markdown('<div class="jfe-stat-label">Email</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div style="font-size:18px;font-weight:600;color:#111827;">{resume.email or "—"}</div>',
+            f'<div style="font-size:18px;font-weight:600;color:#111827;">{html.escape(resume.email or "—")}</div>',
             unsafe_allow_html=True,
         )
 
@@ -196,16 +206,20 @@ def render_profile_tab(result: PipelineResult) -> None:
                 else ""
             )
             desc_html = (
-                f'<div style="color:#6B7280;font-size:13px;margin-top:8px;">{exp.description[:300]}</div>'
+                f'<div style="color:#6B7280;font-size:13px;margin-top:8px;">{html.escape(exp.description[:300])}</div>'
                 if exp.description
                 else ""
             )
+            role_title_safe = html.escape(exp.role_title or "")
+            company_safe = html.escape(exp.company or "")
+            end_safe = html.escape(str(end))
+            start_safe = html.escape(str(exp.start_year))
             st.markdown(
                 f'<div class="jfe-card">'
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
-                f'<div><strong style="color:#111827;font-size:16px;">{exp.role_title}</strong>{contractor_badge}{mgmt_badge}<br>'
-                f'<span style="color:#6B7280;font-size:14px;">{exp.company}</span></div>'
-                f'<span style="color:#6B7280;font-size:13px;">{exp.start_year}–{end}</span>'
+                f'<div><strong style="color:#111827;font-size:16px;">{role_title_safe}</strong>{contractor_badge}{mgmt_badge}<br>'
+                f'<span style="color:#6B7280;font-size:14px;">{company_safe}</span></div>'
+                f'<span style="color:#6B7280;font-size:13px;">{start_safe}–{end_safe}</span>'
                 f"</div>"
                 f"{desc_html}"
                 f"</div>",
@@ -224,7 +238,7 @@ def render_profile_tab(result: PipelineResult) -> None:
     if resume.skills:
         st.subheader("Dovednosti")
         skills_html = "".join(
-            f'<span class="jfe-skill-chip">{s.name}</span>' for s in resume.skills
+            f'<span class="jfe-skill-chip">{html.escape(s.name)}</span>' for s in resume.skills
         )
         st.markdown(f"<div>{skills_html}</div>", unsafe_allow_html=True)
 
@@ -395,11 +409,11 @@ def render_score_tab(result: PipelineResult) -> None:
 
     # ISPV freshness disclosure card — dataset age, inflation correction, match level.
     if salary_data_obj is not None:
-        isco = salary_data_obj.isco_code or "N/A"
-        match_level = salary_data_obj.isco_match_level
+        isco = html.escape(salary_data_obj.isco_code or "N/A")
+        match_level = html.escape(salary_data_obj.isco_match_level)
         age = salary_data_obj.dataset_age_months
         factor = salary_data_obj.inflation_factor_applied
-        conf = salary_data_obj.confidence
+        conf = html.escape(salary_data_obj.confidence)
 
         badge_html_detail = f"""
         <div class="jfe-card" style="background:#F9FAFB;border-left:3px solid #6B7280;">
@@ -448,7 +462,7 @@ def render_recommendations_tab(result: PipelineResult) -> None:
                 f'<div class="jfe-card jfe-card-strength">'
                 f'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:middle;margin-right:8px;">'
                 f'<path d="M5 13l4 4L19 7" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
-                f"</svg>{s}"
+                f"</svg>{html.escape(s)}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -460,7 +474,7 @@ def render_recommendations_tab(result: PipelineResult) -> None:
                 f'<div class="jfe-card jfe-card-gap">'
                 f'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:middle;margin-right:8px;">'
                 f'<path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#D97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
-                f"</svg>{g}"
+                f"</svg>{html.escape(g)}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -474,14 +488,14 @@ def render_recommendations_tab(result: PipelineResult) -> None:
             st.markdown(
                 f'<div style="margin-bottom:12px;">'
                 f'<strong style="color:#0F172A;">Proč je to důležité:</strong> '
-                f'<span style="color:#374151;">{rec.why_it_matters}</span>'
+                f'<span style="color:#374151;">{html.escape(rec.why_it_matters)}</span>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
             st.markdown(
                 f'<div style="margin-bottom:12px;">'
                 f'<strong style="color:#0F172A;">První krok:</strong> '
-                f'<span style="color:#374151;">{rec.first_action}</span>'
+                f'<span style="color:#374151;">{html.escape(rec.first_action)}</span>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -526,13 +540,30 @@ def main() -> None:
     try:
         with st.spinner(f"Analyzuji {file_name}..."):
             result = run_pipeline(file_bytes, file_name, provider)
-    except ISPVLookupError as e:
-        st.warning(f"⚠️ Salary estimate není dostupný\n\n{e}")
+    except NonCZLocationError as e:
+        st.warning(f"⚠️ {e}")
         st.info(
-            "**Co s tím:** ISPV data pokrývají pouze český mzdový trh. "
-            "Pro CV mimo CZ (Berlin, London, Bratislava…) tento nástroj salary range "
-            "nedovede vrátit. CV ale můžeš nahrát s lokací v CZ a uvidíš odhad."
+            "ISPV data pokrývají jen český trh. Nahraj CV s lokací v CZ "
+            "(libovolné město), nebo lokaci v CV uprav."
         )
+        st.stop()
+    except ISPVDataMissingError as e:
+        st.warning(f"⚠️ {e}")
+        st.info(
+            "Klikni na **🔄 Stáhnout ISPV** v levém panelu — stáhne se "
+            "`data/ispv_2025.xlsx` (~150 kB) z ispv.cz. Po stažení nahraj CV znovu."
+        )
+        st.stop()
+    except MissingISCOError as e:
+        st.warning(f"⚠️ {e}")
+        st.info(
+            "Parser ze CV nedokázal určit profesi (CZ-ISCO-08 kód). "
+            "Možné příčiny: CV bez jasných pracovních titulů, příliš obecné popisy rolí, "
+            "neobvyklé/ezoterické povolání. Můžeš zkusit CV upravit nebo nahrát jiné."
+        )
+        st.stop()
+    except ISPVLookupError as e:
+        st.error(f"Salary estimate selhal: {e}")
         st.stop()
     except ValueError as e:
         st.error(f"Pipeline selhal: {e}")

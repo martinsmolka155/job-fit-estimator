@@ -332,3 +332,63 @@ class TestEducationRelevanceByFamily:
         )
         # master base = 75, +10 bonus = 85
         assert edu.score == pytest.approx(85.0), f"Expected score 85.0 (75+10), got {edu.score}"
+
+
+class TestExperienceOverlapDedup:
+    """Verify ExperienceComponent merges overlapping intervals before summing.
+
+    Parallel roles (e.g. main HPP 2020-2024 + side freelance 2021-2023) must
+    not double-count toward total years of experience.
+    """
+
+    def test_two_fully_overlapping_roles_count_once(self) -> None:
+        """Two roles 2020-2024 must count as 4 years, not 8."""
+        resume = Resume(
+            full_name="Parallel Worker",
+            educations=[Education(degree="bachelor", year_completed=2019)],
+            experiences=[
+                _make_exp("MainCorp", 2020, 2024, seniority="senior"),
+                _make_exp("SideClient", 2020, 2024, is_contractor=True, seniority="senior"),
+            ],
+            raw_text_length=1000,
+        )
+        score = score_resume(resume)
+        exp_comp = next(c for c in score.components if c.name == "ExperienceComponent")
+        # 4 years × 8 = 32 base + 10 senior bonus = 42 (not 64+10 from 8 years)
+        assert "4 total years" in exp_comp.reasoning, (
+            f"Expected 4 deduped years, got: {exp_comp.reasoning}"
+        )
+
+    def test_partial_overlap_uses_union_length(self) -> None:
+        """2018-2022 + 2020-2024 must count as 6 years (union), not 8."""
+        resume = Resume(
+            full_name="Partial Overlap",
+            educations=[Education(degree="bachelor", year_completed=2017)],
+            experiences=[
+                _make_exp("First", 2018, 2022, seniority="medior"),
+                _make_exp("Second", 2020, 2024, seniority="senior"),
+            ],
+            raw_text_length=1000,
+        )
+        score = score_resume(resume)
+        exp_comp = next(c for c in score.components if c.name == "ExperienceComponent")
+        assert "6 total years" in exp_comp.reasoning, (
+            f"Expected 6 union years, got: {exp_comp.reasoning}"
+        )
+
+    def test_disjoint_intervals_sum_normally(self) -> None:
+        """Non-overlapping 2014-2018 + 2020-2024 must count as 8 years total."""
+        resume = Resume(
+            full_name="Sequential",
+            educations=[Education(degree="bachelor", year_completed=2013)],
+            experiences=[
+                _make_exp("First", 2014, 2018, seniority="medior"),
+                _make_exp("Second", 2020, 2024, seniority="senior"),
+            ],
+            raw_text_length=1000,
+        )
+        score = score_resume(resume)
+        exp_comp = next(c for c in score.components if c.name == "ExperienceComponent")
+        assert "8 total years" in exp_comp.reasoning, (
+            f"Expected 8 disjoint years, got: {exp_comp.reasoning}"
+        )

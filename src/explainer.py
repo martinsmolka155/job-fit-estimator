@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.llm_provider import LLMProvider
 from src.schemas import Explanation, Resume, SalaryEstimate, SeniorityScore
@@ -96,9 +96,10 @@ class Explainer:
                 )
 
             try:
-                explanation, meta = self.llm.extract_structured(
+                raw_explanation, meta = self.llm.extract_structured(
                     prompt, Explanation, max_tokens=4096
                 )
+                explanation = cast("Explanation", raw_explanation)
             except Exception:
                 logger.exception("LLM call failed on explainer attempt %d", attempt + 1)
                 last_meta = {"cost_usd": 0.0, "error": "llm_failed", "retries": attempt + 1}
