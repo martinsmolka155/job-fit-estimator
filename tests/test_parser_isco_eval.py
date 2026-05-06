@@ -60,7 +60,6 @@ def test_parser_assigns_correct_isco(
 ) -> None:
     """Verify LLM parser assigns expected ISCO code and occupation_family.
 
-    Phase-23.5: skip marker snapped after parser_system.txt path fix (cv_parser_system.txt).
     Uses real LLM (OpenAI gpt-4o-mini) with settings from .env.
 
     Acceptance criterion:
