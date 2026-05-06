@@ -20,6 +20,7 @@ from typing import Any, cast
 import httpx
 import streamlit as st
 
+from src.cost_tracker import BudgetExceededError
 from src.pipeline import Pipeline
 from src.salary_ispv import (
     ISPVDataMissingError,
@@ -540,6 +541,13 @@ def main() -> None:
     try:
         with st.spinner(f"Analyzuji {file_name}..."):
             result = run_pipeline(file_bytes, file_name, provider)
+    except BudgetExceededError as e:
+        st.warning(f"⚠️ Denní rozpočet API vyčerpán\n\n{e}")
+        st.info(
+            "Limit `DAILY_API_BUDGET_USD` v `.env` je dosažen. Zvyš ho a "
+            "restartuj aplikaci, nebo počkej do dalšího UTC dne."
+        )
+        st.stop()
     except NonCZLocationError as e:
         st.warning(f"⚠️ {e}")
         st.info(

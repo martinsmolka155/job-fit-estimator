@@ -159,3 +159,38 @@ class TestExplainerEdgeCases:
         second_prompt = second_call_args.args[0]
         assert "PREVIOUS ATTEMPT FAILED" in second_prompt
         assert "30" in second_prompt
+
+
+class TestExplainerErrorAndWarningExclusivity:
+    """Verify that error='llm_failed' and warning='below_30pct_target' are
+    mutually exclusive in meta — they describe two different failure modes
+    and stacking them confuses downstream metrics.
+    """
+
+    def test_all_calls_failing_sets_error_only(self) -> None:
+        """When every LLM attempt raises, meta must carry error but NOT warning."""
+        from unittest.mock import MagicMock
+
+        llm = MagicMock()
+        llm.extract_structured.side_effect = RuntimeError("simulated outage")
+        explainer = Explainer(llm)
+
+        _explanation, meta = explainer.explain(_make_resume(), _make_score(), _make_salary())
+
+        assert meta.get("error") == "llm_failed"
+        assert "warning" not in meta, (
+            f"Expected no 'warning' key when LLM totally failed, got meta={meta}"
+        )
+
+    def test_low_quality_responses_set_warning_only(self) -> None:
+        """When LLM returned 3 low-impact recs every time, meta must carry warning but NOT error."""
+        low_impact = _make_explanation([5.0, 5.0, 5.0])
+        llm = _make_mock_llm([low_impact, low_impact, low_impact])
+        explainer = Explainer(llm)
+
+        _explanation, meta = explainer.explain(_make_resume(), _make_score(), _make_salary())
+
+        assert meta.get("warning") == "below_30pct_target"
+        assert "error" not in meta, (
+            f"Expected no 'error' key when LLM responded but quality was low, got meta={meta}"
+        )

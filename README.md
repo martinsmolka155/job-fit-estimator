@@ -123,7 +123,7 @@ src/
 prompts/             # System prompts (parser, explainer)
 data/                # ISPV XLSX (downloaded), inflation factors
 ui/                  # Streamlit app
-tests/               # 171 pytest tests + 4 golden-set evals (live LLM)
+tests/               # 182 pytest tests + 4 golden-set evals (live LLM)
 scripts/             # Eval harness + fixture generator
 main.py              # CLI entrypoint
 api.py               # FastAPI endpoint

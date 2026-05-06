@@ -158,8 +158,13 @@ class Explainer:
             MAX_RETRIES,
         )
 
-        if last_explanation is None:
-            # All LLM calls failed — return minimal fallback
+        # Distinguish two failure modes:
+        #   (a) every LLM call raised → last_explanation is None → "llm_failed"
+        #   (b) calls succeeded but never met the quality bar → "below_30pct_target"
+        # The two are mutually exclusive; stacking both used to confuse metrics.
+        all_calls_failed = last_explanation is None
+
+        if all_calls_failed:
             from pydantic import ValidationError
 
             try:
@@ -172,8 +177,12 @@ class Explainer:
             except ValidationError as exc:
                 raise RuntimeError("Explainer: LLM failed and fallback creation failed") from exc
 
-        last_meta["warning"] = "below_30pct_target"
         last_meta["retries"] = MAX_RETRIES
+        if not all_calls_failed:
+            # Quality threshold never met — surface the dedicated warning.
+            last_meta["warning"] = "below_30pct_target"
+        # If all_calls_failed, last_meta already carries error="llm_failed" from
+        # the last attempt; do not also set warning="below_30pct_target".
         return last_explanation, last_meta
 
 

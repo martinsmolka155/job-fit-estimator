@@ -13,7 +13,7 @@ What is shipped in this repo, what is deliberately MVP-scope, and what one to tw
 - Hard-fail surface for "we cannot honestly estimate this": non-CZ location, missing ISPV dataset, missing ISCO, lookup failure — each with a distinct exception subclass and surfaced as a targeted UI / HTTP message.
 - Streamlit UI with sidebar ISPV downloader (scrapes `ispv.cz`), 3 result tabs, freshness-disclosure badge, HPP/IČO + sector caveats.
 - Headless CLI (`main.py`) and FastAPI endpoint (`api.py`) for integration outside the UI.
-- 171 pytest tests + 4 golden-set ISCO classification tests gated behind `OPENAI_API_KEY` (live LLM). Coverage 65 %.
+- 182 pytest tests + 4 golden-set ISCO classification tests gated behind `OPENAI_API_KEY` (live LLM). Coverage 68 %.
 
 ---
 

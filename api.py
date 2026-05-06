@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from src.config import settings
+from src.cost_tracker import BudgetExceededError
 from src.pipeline import Pipeline
 from src.salary_ispv import (
     ISPVDataMissingError,
@@ -60,14 +61,19 @@ async def analyze(cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
         tmp.write(body)
         tmp_path = Path(tmp.name)
 
-    pipeline = Pipeline(
-        "openai",
-        parser_model=settings.parser_model,
-        explainer_model=settings.explainer_model,
-    )
-
+    # Pipeline construction lives inside the try/finally so any init failure
+    # (missing settings, broken provider) still goes through the cleanup path
+    # and the temp upload doesn't leak to /tmp.
     try:
+        pipeline = Pipeline(
+            "openai",
+            parser_model=settings.parser_model,
+            explainer_model=settings.explainer_model,
+        )
         result = pipeline.run(tmp_path)
+    except BudgetExceededError as e:
+        # Operational state — surface as 429 so callers can back off.
+        raise HTTPException(status_code=429, detail=str(e)) from e
     except ISPVDataMissingError as e:
         # Service is not ready — operator must download the ISPV dataset.
         raise HTTPException(status_code=503, detail=str(e)) from e
