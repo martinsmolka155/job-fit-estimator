@@ -18,10 +18,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+# COST_LOG_PATH is anchored to the project root in src/paths.py so the cost
+# log lands in the right place regardless of the shell's current working
+# directory.
+from src.paths import COST_LOG_PATH as DEFAULT_COST_LOG_PATH
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_BUDGET_USD = 5.00
-DEFAULT_COST_LOG_PATH = Path("data/.cost_log.jsonl")
 WARN_THRESHOLD_PCT = 0.90
 
 

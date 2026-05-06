@@ -7,19 +7,18 @@ Prompt lives in prompts/parser_system.txt — no inline prompts here.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, cast
 
 from src.llm_provider import LLMProvider
+from src.paths import PARSER_PROMPT_PATH as _PROMPT_PATH
 from src.schemas import Resume
 
 logger = logging.getLogger(__name__)
 
-# Maximum characters sent to LLM — longer CVs get truncated
+# Maximum characters sent to LLM — longer CVs get truncated.
+# _PROMPT_PATH is anchored to the project root so the parser works regardless
+# of the shell's current working directory.
 _MAX_TEXT_CHARS = 30_000
-
-# Path to system prompt file (relative to project root)
-_PROMPT_PATH = Path("prompts/cv_parser_system.txt")
 
 
 class ResumeParser:

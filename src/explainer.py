@@ -9,17 +9,15 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 
 from src.llm_provider import LLMProvider
+from src.paths import EXPLAINER_PROMPT_PATH as _PROMPT_PATH
 from src.schemas import Explanation, Resume, SalaryEstimate, SeniorityScore
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3  # hardcap — no infinite loop
-
-_PROMPT_PATH = Path("prompts/explainer_system.txt")
 _MIN_TOTAL_IMPACT_PCT = 30.0
 
 

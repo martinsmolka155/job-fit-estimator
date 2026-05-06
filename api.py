@@ -20,7 +20,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from src.config import settings
 from src.cost_tracker import BudgetExceededError
-from src.pipeline import Pipeline
+from src.pipeline import Pipeline, PipelineInfrastructureError
 from src.salary_ispv import (
     ISPVDataMissingError,
     ISPVLookupError,
@@ -35,6 +35,11 @@ app = FastAPI(
     description="Analyzes a CV and returns seniority score, salary estimate, and recommendations.",
     version="1.0.0",
 )
+
+# Hard cap on upload size — CVs are typically < 1 MB; 10 MB leaves headroom
+# for image-heavy designer portfolios while bounding memory/disk impact.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_CHUNK_SIZE = 64 * 1024  # 64 KB streaming chunks
 
 
 @app.get("/health")
@@ -56,10 +61,25 @@ async def analyze(cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured.")
 
-    body = await cv.read()
+    # Stream the upload to a temp file in 64 KB chunks. This avoids holding
+    # the full payload in RAM and lets us enforce MAX_UPLOAD_BYTES early
+    # rather than after the whole body has been read.
+    bytes_written = 0
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(body)
         tmp_path = Path(tmp.name)
+        while True:
+            chunk = await cv.read(_CHUNK_SIZE)
+            if not chunk:
+                break
+            bytes_written += len(chunk)
+            if bytes_written > MAX_UPLOAD_BYTES:
+                tmp.close()
+                tmp_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+                )
+            tmp.write(chunk)
 
     # Pipeline construction lives inside the try/finally so any init failure
     # (missing settings, broken provider) still goes through the cleanup path
@@ -74,6 +94,11 @@ async def analyze(cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
     except BudgetExceededError as e:
         # Operational state — surface as 429 so callers can back off.
         raise HTTPException(status_code=429, detail=str(e)) from e
+    except PipelineInfrastructureError as e:
+        # Server-side dependency failed (LLM provider, prompt, etc.) — 502 so
+        # operator monitoring picks this up instead of blaming the CV.
+        logger.exception("pipeline infrastructure failure for %s", filename)
+        raise HTTPException(status_code=502, detail=str(e)) from e
     except ISPVDataMissingError as e:
         # Service is not ready — operator must download the ISPV dataset.
         raise HTTPException(status_code=503, detail=str(e)) from e

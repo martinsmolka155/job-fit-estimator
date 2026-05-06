@@ -109,3 +109,28 @@ def test_pipeline_init_failure_cleans_up_tempfile(
     assert leaked_paths, "tempfile fixture not exercised"
     for path in leaked_paths:
         assert not path.exists(), f"Tempfile leaked on Pipeline init failure: {path}"
+
+
+def test_pipeline_infrastructure_error_returns_502(client: TestClient) -> None:
+    """Parser/LLM provider failures must surface as 5xx, not as 422 'bad CV'."""
+    from src.pipeline import PipelineInfrastructureError
+
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.side_effect = PipelineInfrastructureError(
+            "OpenAI outage"
+        )
+        response = _upload(client)
+
+    assert response.status_code == 502
+    assert "OpenAI outage" in response.json()["detail"]
+
+
+def test_oversized_upload_returns_413(client: TestClient) -> None:
+    """Uploads exceeding MAX_UPLOAD_BYTES must be rejected with 413."""
+    big_payload = b"%PDF-1.4 " + b"x" * (api.MAX_UPLOAD_BYTES + 1024)
+    response = client.post(
+        "/analyze",
+        files={"cv": ("big.pdf", io.BytesIO(big_payload), "application/pdf")},
+    )
+    assert response.status_code == 413
+    assert "limit" in response.json()["detail"].lower()

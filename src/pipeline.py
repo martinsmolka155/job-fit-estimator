@@ -28,12 +28,23 @@ from src.extractor import UnsupportedFormatError, extract_text
 from src.llm_provider import get_provider
 from src.logging_config import bind_run_id, configure_logging
 from src.parser import ResumeParser
+from src.paths import INFLATION_FACTORS_PATH, ISPV_XLSX_PATH
 from src.salary_ispv import ISPVLoader, ISPVLookupError
 from src.schemas import PipelineResult, Resume, SeniorityScore
 from src.scorer import score_resume
 from src.validator import EmbeddingValidator, ResumeValidator, compute_confidence
 
 logger = logging.getLogger(__name__)
+
+
+class PipelineInfrastructureError(RuntimeError):
+    """Raised when an LLM, prompt file, or other infrastructure dependency fails.
+
+    Distinct from ISPVLookupError (caller-side / data-quality issue) and
+    UnsupportedFormatError (input format issue) — this signals a server-side
+    problem that should map to HTTP 5xx and trigger operator monitoring,
+    not a 4xx "bad CV" response.
+    """
 
 
 class Pipeline:
@@ -74,25 +85,28 @@ class Pipeline:
         self.explainer = Explainer(explainer_llm)
 
         # Wire ISPV salary data source — loads from data/ispv_2025.xlsx if present.
-        # Download the file via the /admin page when missing.
-        ispv_path = Path("data/ispv_2025.xlsx")
-        inflation_path = Path("data/inflation_factors.json")
+        # Path is anchored to project root in src/paths.py so the loader works
+        # regardless of cwd. Download the file via the sidebar "Stáhnout ISPV"
+        # button when missing.
         inflation_factors: dict[str, float] = {}
-        if inflation_path.exists():
-            raw = json.loads(inflation_path.read_text(encoding="utf-8"))
+        if INFLATION_FACTORS_PATH.exists():
+            raw = json.loads(INFLATION_FACTORS_PATH.read_text(encoding="utf-8"))
             # Strip comment/metadata keys (convention: keys starting with "_")
             inflation_factors = {k: float(v) for k, v in raw.items() if not k.startswith("_")}
 
         ispv_loader: ISPVLoader | None = None
-        if ispv_path.exists():
-            ispv_loader = ISPVLoader(xlsx_path=ispv_path, inflation_factors=inflation_factors)
+        if ISPV_XLSX_PATH.exists():
+            ispv_loader = ISPVLoader(xlsx_path=ISPV_XLSX_PATH, inflation_factors=inflation_factors)
             try:
                 ispv_loader.load()
             except Exception:
                 logger.exception("ISPV load failed — salary estimation will be unavailable")
                 ispv_loader = None
         else:
-            logger.warning("ISPV file not found at %s — download via /admin page", ispv_path)
+            logger.warning(
+                "ISPV file not found at %s — download via sidebar 'Stáhnout ISPV' button",
+                ISPV_XLSX_PATH,
+            )
 
         self.estimator = SalaryEstimator(ispv_loader=ispv_loader)
         # Layer-2 embedding validator — opt-in to avoid embedding cost on every run.
@@ -126,6 +140,33 @@ class Pipeline:
         meta: dict[str, Any] = {"steps": {}, "run_id": run_id}
         run_error: str | None = None
 
+        try:
+            return self._run_inner(file_path, run_id, wall_start, meta)
+        except Exception as exc:
+            # Whatever raises (PipelineInfrastructureError, ISPVLookupError,
+            # BudgetExceededError, etc.), persist whatever cost we accumulated
+            # before the failure so DAILY_API_BUDGET_USD reflects real spend.
+            run_error = type(exc).__name__
+            self._persist_cost_record(
+                run_id=run_id,
+                file_path=file_path,
+                meta=meta,
+                wall_start=wall_start,
+                score_total=None,
+                run_error=run_error,
+            )
+            raise
+
+    def _run_inner(
+        self,
+        file_path: Path,
+        run_id: str,
+        wall_start: float,
+        meta: dict[str, Any],
+    ) -> PipelineResult:
+        """Execute the six-stage pipeline. Cost record is persisted by the caller."""
+        run_error: str | None = None
+
         # ── Step 1: Extract ──────────────────────────────────────────────────
         logger.info("Pipeline step 1/6: extract — %s", file_path.name)
         step_start = time.monotonic()
@@ -155,22 +196,44 @@ class Pipeline:
         # ── Step 2: Parse ────────────────────────────────────────────────────
         logger.info("Pipeline step 2/6: parse")
         step_start = time.monotonic()
+        parse_failed_infrastructurally = False
         try:
             resume, parse_meta = self.parser.parse(doc.text)
-            meta["steps"]["parse"] = {
-                "status": "ok",
-                "cost_usd": parse_meta.get("cost_usd", 0.0),
-                "duration_s": time.monotonic() - step_start,
-                "truncated": parse_meta.get("truncated", False),
-            }
+            # ResumeParser swallows LLM errors and returns an empty Resume with
+            # parse_meta["error"] set. Detect that here so we don't pretend the
+            # parse step succeeded — otherwise the downstream MissingISCOError
+            # would mislead the API into a 4xx "bad CV" response.
+            if parse_meta.get("error"):
+                parse_failed_infrastructurally = True
+                meta["steps"]["parse"] = {
+                    "status": "error",
+                    "cost_usd": parse_meta.get("cost_usd", 0.0),
+                    "error": parse_meta["error"],
+                    "duration_s": time.monotonic() - step_start,
+                }
+            else:
+                meta["steps"]["parse"] = {
+                    "status": "ok",
+                    "cost_usd": parse_meta.get("cost_usd", 0.0),
+                    "duration_s": time.monotonic() - step_start,
+                    "truncated": parse_meta.get("truncated", False),
+                }
         except Exception:
             logger.exception("Parse step failed")
             resume = Resume(raw_text_length=len(doc.text))
             parse_meta = {"cost_usd": 0.0}
+            parse_failed_infrastructurally = True
             meta["steps"]["parse"] = {
                 "status": "error",
                 "duration_s": time.monotonic() - step_start,
             }
+
+        if parse_failed_infrastructurally:
+            # Surface as a server-side problem, not a CV-content problem.
+            raise PipelineInfrastructureError(
+                "Parser LLM call failed — provider/network/prompt issue. "
+                "Check API key, OpenAI status, and prompts/cv_parser_system.txt."
+            )
 
         # ── Step 3: Validate ─────────────────────────────────────────────────
         logger.info("Pipeline step 3/6: validate")
@@ -316,19 +379,14 @@ class Pipeline:
                 run_error = f"{step_name}_failed"
 
         # Persist cost record for budget tracking and metrics CLI
-        cost_record = CostRecord(
+        self._persist_cost_record(
             run_id=run_id,
-            timestamp_utc=datetime.now(UTC).isoformat(),
-            fixture_or_file=str(file_path),
-            total_cost_usd=total_cost,
-            parse_cost_usd=parse_cost,
-            explain_cost_usd=explain_cost,
-            embed_cost_usd=embed_cost,
-            duration_s=meta["total_duration_s"],
+            file_path=file_path,
+            meta=meta,
+            wall_start=wall_start,
             score_total=score.total,
-            error=run_error,
+            run_error=run_error,
         )
-        record_run(cost_record)
 
         return PipelineResult(
             resume=resume,
@@ -338,3 +396,37 @@ class Pipeline:
             explanation=explanation,
             meta=meta,
         )
+
+    def _persist_cost_record(
+        self,
+        *,
+        run_id: str,
+        file_path: Path,
+        meta: dict[str, Any],
+        wall_start: float,
+        score_total: float | None,
+        run_error: str | None,
+    ) -> None:
+        """Write a CostRecord whether the pipeline succeeded or raised.
+
+        Called from the success path AND from the outer except-finally so that
+        partial spend (e.g. parser tokens consumed before estimator raised) is
+        always reflected in the daily budget log.
+        """
+        parse_cost = float(meta["steps"].get("parse", {}).get("cost_usd", 0.0))
+        explain_cost = float(meta["steps"].get("explain", {}).get("cost_usd", 0.0))
+        embed_cost = float(meta["steps"].get("validate", {}).get("embed_cost_usd", 0.0))
+        total_cost = parse_cost + explain_cost + embed_cost
+        cost_record = CostRecord(
+            run_id=run_id,
+            timestamp_utc=datetime.now(UTC).isoformat(),
+            fixture_or_file=str(file_path),
+            total_cost_usd=total_cost,
+            parse_cost_usd=parse_cost,
+            explain_cost_usd=explain_cost,
+            embed_cost_usd=embed_cost,
+            duration_s=round(time.monotonic() - wall_start, 2),
+            score_total=score_total,
+            error=run_error,
+        )
+        record_run(cost_record)

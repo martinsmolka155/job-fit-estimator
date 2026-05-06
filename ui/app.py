@@ -21,7 +21,8 @@ import httpx
 import streamlit as st
 
 from src.cost_tracker import BudgetExceededError
-from src.pipeline import Pipeline
+from src.paths import ISPV_XLSX_PATH as ISPV_TARGET_PATH
+from src.pipeline import Pipeline, PipelineInfrastructureError
 from src.salary_ispv import (
     ISPVDataMissingError,
     ISPVLookupError,
@@ -32,7 +33,6 @@ from src.schemas import PipelineResult, SalaryData
 from ui.styles import inject_css
 
 ISPV_INDEX_URL = "https://www.ispv.cz/cz/vysledky-setreni/aktualni.aspx"
-ISPV_TARGET_PATH = Path("data/ispv_2025.xlsx")
 
 logger = logging.getLogger(__name__)
 
@@ -547,6 +547,14 @@ def main() -> None:
             "Limit `DAILY_API_BUDGET_USD` v `.env` je dosažen. Zvyš ho a "
             "restartuj aplikaci, nebo počkej do dalšího UTC dne."
         )
+        st.stop()
+    except PipelineInfrastructureError as e:
+        st.error(f"⚠️ Backend nedostupný\n\n{e}")
+        st.info(
+            "LLM provider, prompt, nebo síťová vrstva selhala. "
+            "Zkontroluj `OPENAI_API_KEY`, status OpenAI a soubory v `prompts/`."
+        )
+        logger.exception("Pipeline infrastructure failure for %s", file_name)
         st.stop()
     except NonCZLocationError as e:
         st.warning(f"⚠️ {e}")

@@ -23,7 +23,7 @@ from pathlib import Path
 
 from src.config import settings
 from src.cost_tracker import BudgetExceededError
-from src.pipeline import Pipeline
+from src.pipeline import Pipeline, PipelineInfrastructureError
 from src.salary_ispv import ISPVLookupError
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,9 @@ def main() -> int:
     except BudgetExceededError as e:
         print(f"budget: daily API budget exhausted: {e}", file=sys.stderr)
         return 5
+    except PipelineInfrastructureError as e:
+        print(f"infrastructure: {e}", file=sys.stderr)
+        return 6
     except ISPVLookupError as e:
         print(f"error: salary estimate unavailable: {e}", file=sys.stderr)
         return 4
