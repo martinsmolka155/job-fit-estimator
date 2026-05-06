@@ -99,9 +99,10 @@ Each one is a tradeoff, not a bug. They are visible to anyone reading the source
 | Lead/principal bands | Extrapolated above ISPV's 90th percentile using documented multipliers | Custom survey of senior compensation + equity disclosure |
 | Tech bonus underreport | ISPV captures payroll only; AI/ML/cloud premiums and equity are partly invisible. Mitigated by per-family inflation rates (IT ×1.08/yr) | Vendor-specific compensation feeds (e.g. AON, Mercer) |
 | Sample suppression | Some narrow ISCO codes have insufficient ISPV respondents; loader falls back to broader codes with `confidence=medium` warning | Multi-source merge to fill gaps, region-stratified sampling |
-| Multi-language | English + Czech via LLM prompt | Full localisation layer with locale detection |
+| Output language | Czech only — explainer prompt forces CS regardless of CV language | Locale detection + per-request `OUTPUT_LANGUAGE` override |
 | OCR | Not supported — scanned PDFs return a clean error | Tesseract + post-processing |
 | Eval dataset | 4 fixtures (IT dev, healthcare nurse, services cook, sales rep) + 1 real-world CV | 100+ anonymised real CVs with ground-truth labels |
+| API auth & rate limits | None — `/analyze` is open; relies only on `DAILY_API_BUDGET_USD` cap | OAuth + per-tenant rate limits + audit logging (see `docs/PRODUCTION_ROADMAP.md`) |
 
 See `docs/PRODUCTION_ROADMAP.md` for a sequenced plan of what one to two weeks vs one to two months of further work would unlock.
 

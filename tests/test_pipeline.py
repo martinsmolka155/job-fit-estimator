@@ -86,7 +86,9 @@ def test_parser_infra_failure_raises_pipeline_infrastructure_error(
     the empty Resume cascade into a misleading MissingISCOError downstream.
     """
     cost_log = tmp_path / "cost_log.jsonl"
-    monkeypatch.setattr("src.pipeline.record_run", lambda r: cost_log.write_text(json.dumps(r.__dict__) + "\n"))
+    monkeypatch.setattr(
+        "src.pipeline.record_run", lambda r: cost_log.write_text(json.dumps(r.__dict__) + "\n")
+    )
     monkeypatch.setattr("src.pipeline.check_budget", lambda **_: None)
 
     pipeline = _build_pipeline_with_mocks()
@@ -133,7 +135,9 @@ def test_extract_failure_still_persists_cost_record(
     persisted: list[dict[str, Any]] = []
     monkeypatch.setattr("src.pipeline.record_run", lambda r: persisted.append(r.__dict__))
     monkeypatch.setattr("src.pipeline.check_budget", lambda **_: None)
-    monkeypatch.setattr("src.pipeline.extract_text", MagicMock(side_effect=ISPVDataMissingError("simulated")))
+    monkeypatch.setattr(
+        "src.pipeline.extract_text", MagicMock(side_effect=ISPVDataMissingError("simulated"))
+    )
 
     pipeline = _build_pipeline_with_mocks()
 
