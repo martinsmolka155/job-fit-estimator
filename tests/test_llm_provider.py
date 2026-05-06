@@ -12,7 +12,7 @@ import openai
 import pytest
 from pydantic import BaseModel
 
-from src.llm_provider import OpenAIProvider, get_provider
+from src.llm_provider import LLMProviderError, OpenAIProvider, get_provider
 
 
 class _SimpleSchema(BaseModel):
@@ -138,7 +138,7 @@ class TestOpenAIProvider:
                 "parse",
                 return_value=mock_response,
             ) as mock_parse,
-            pytest.raises(ValueError, match="OpenAI refused"),
+            pytest.raises(LLMProviderError, match="OpenAI refused"),
         ):
             provider.extract_structured("test prompt", _SimpleSchema)
 
@@ -220,7 +220,7 @@ class TestOpenAIProvider:
                 "parse",
                 return_value=mock_response,
             ) as mock_parse,
-            pytest.raises(ValueError, match="None parsed result"),
+            pytest.raises(LLMProviderError, match="None parsed result"),
         ):
             provider.extract_structured("test prompt", _SimpleSchema)
 
@@ -237,7 +237,7 @@ class TestOpenAIProvider:
                 "parse",
                 return_value=mock_response,
             ) as mock_parse,
-            pytest.raises(ValueError, match="OpenAI refused"),
+            pytest.raises(LLMProviderError, match="OpenAI refused"),
         ):
             provider.extract_structured("prompt", _SimpleSchema, max_tokens=100)
 
@@ -263,7 +263,7 @@ class TestOpenAIProvider:
                 "parse",
                 return_value=response,
             ) as mock_parse,
-            pytest.raises(ValueError, match="None parsed result"),
+            pytest.raises(LLMProviderError, match="None parsed result"),
         ):
             provider.extract_structured("prompt", _SimpleSchema, max_tokens=100)
 

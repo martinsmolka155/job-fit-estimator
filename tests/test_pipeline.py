@@ -167,3 +167,36 @@ def test_paths_anchored_to_project_root() -> None:
     ):
         assert path.is_absolute(), f"{path} must be absolute"
         assert PROJECT_ROOT in path.parents, f"{path} must live under {PROJECT_ROOT}"
+
+
+def test_pipeline_init_wires_components(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise Pipeline.__init__ end-to-end with mocked LLM provider.
+
+    Earlier integration tests bypassed __init__ via Pipeline.__new__, which
+    meant provider wiring, ISPV loading, and inflation-factor merging were
+    completely untested. This test covers the construction path.
+    """
+    fake_llm = MagicMock(model="gpt-4o-mini")
+
+    def _fake_get_provider(name: str, model: str) -> MagicMock:
+        return MagicMock(model=model)
+
+    monkeypatch.setattr("src.pipeline.get_provider", _fake_get_provider)
+
+    pipeline = Pipeline("openai", parser_model="gpt-4o-mini", explainer_model="gpt-4o-mini")
+
+    # Required components present and wired.
+    assert pipeline.parser is not None
+    assert pipeline.validator is not None
+    assert pipeline.explainer is not None
+    assert pipeline.estimator is not None
+    # Embedding validator stays None unless explicitly enabled.
+    assert pipeline._embedding_validator is None  # type: ignore[attr-defined]
+    # ISPV loader is wired iff data/ispv_2025.xlsx exists in this checkout.
+    # Either way, the estimator must hold a reference (None or loaded).
+    assert hasattr(pipeline.estimator, "_loader")  # noqa: SLF001
+    # Both LLMs were resolved through get_provider.
+    assert pipeline._parser_llm.model == "gpt-4o-mini"  # type: ignore[attr-defined]
+    assert pipeline._explainer_llm.model == "gpt-4o-mini"  # type: ignore[attr-defined]
+    # fake_llm reference held to prevent unused-variable warning.
+    assert fake_llm is not None

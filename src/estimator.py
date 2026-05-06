@@ -48,12 +48,15 @@ _LOCATION_MULTIPLIERS: dict[str, tuple[float, str]] = {
     "teplice": (0.80, "Teplice regional multiplier"),
 }
 
-# Non-CZ country/city indicators. Word-boundary regex so substrings like "cz"
-# don't false-match (e.g. "Szczecin"). If any token matches, location is treated
-# as non-CZ even when "remote" or "czech" also appears (e.g. "Remote US",
-# "Czech expat in Berlin").
+# Non-CZ country/city / non-CZ-employer remote indicators. Word-boundary
+# regex so substrings like "cz" don't false-match (e.g. "Szczecin"). If any
+# token matches, location is treated as non-CZ even when "remote" or "czech"
+# also appears (e.g. "Remote US", "Czech expat in Berlin").
 _NON_CZ_COUNTRIES_RE = re.compile(
     r"\b("
+    # Cross-border remote indicators — "Remote EU", "Europe remote", etc.
+    # all imply non-CZ employer; the README contract says hard-fail.
+    r"eu|europe|european|"
     # Germany
     r"germany|german|deutschland|berlin|hamburg|münchen|munchen|munich|frankfurt|cologne|"
     # Poland
@@ -130,15 +133,18 @@ class SalaryEstimator:
         return bool(_NON_CZ_COUNTRIES_RE.search(location))
 
     def _detect_location_multiplier(self, resume: Resume) -> float:
-        """Return a location multiplier based on resume.location string."""
+        """Return a location multiplier based on resume.location string.
+
+        Only CZ-city multipliers are honored. "Remote EU"/"Remote US" used
+        to receive uplift here, but those locations now hard-fail at
+        _is_non_cz_location() upstream — the README contract is CZ-only.
+        Plain "remote" without a country indicator is treated as CZ employer
+        and gets the default ×1.0.
+        """
         location = (resume.location or "").lower()
         for keyword, (mult, _label) in _LOCATION_MULTIPLIERS.items():
             if keyword in location:
                 return mult
-        if "remote" in location and ("eu" in location or "europe" in location):
-            return 1.10
-        if "remote" in location and ("us" in location or "usa" in location):
-            return 1.25
         return 1.0
 
     def _has_management(self, resume: Resume) -> bool:

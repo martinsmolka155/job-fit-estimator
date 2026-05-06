@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.explainer import MAX_RETRIES, Explainer
 from src.schemas import (
     Explanation,
@@ -194,3 +196,28 @@ class TestExplainerErrorAndWarningExclusivity:
         assert "error" not in meta, (
             f"Expected no 'error' key when LLM responded but quality was low, got meta={meta}"
         )
+
+
+def test_explainer_preserves_partial_cost_on_llm_error() -> None:
+    """When LLM raises LLMProviderError carrying cost (refusal / validation
+    failure after token spend), the explainer must surface that cost in
+    last_meta so the daily budget log doesn't under-count.
+    """
+    from unittest.mock import MagicMock
+
+    from src.llm_provider import LLMProviderError
+
+    llm = MagicMock()
+    llm.extract_structured.side_effect = LLMProviderError(
+        "refused",
+        cost_usd=0.0042,
+        meta={"input_tokens": 1500, "output_tokens": 50, "model": "gpt-4o-mini"},
+    )
+    explainer = Explainer(llm)
+
+    _explanation, meta = explainer.explain(_make_resume(), _make_score(), _make_salary())
+
+    assert meta.get("error") == "llm_failed"
+    assert meta.get("cost_usd") == pytest.approx(0.0042), (
+        f"Partial cost from LLMProviderError must propagate, got meta={meta}"
+    )

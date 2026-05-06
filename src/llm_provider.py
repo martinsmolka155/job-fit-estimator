@@ -28,6 +28,27 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
+class LLMProviderError(RuntimeError):
+    """Raised when an LLM call returns a refusal, empty parse, or fails validation.
+
+    Carries the partial cost actually incurred (tokens consumed before the
+    failure) so the pipeline can still log it against the daily budget.
+    Otherwise refused/malformed responses would burn tokens silently and
+    DAILY_API_BUDGET_USD would under-count.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        cost_usd: float = 0.0,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.cost_usd = cost_usd
+        self.meta: dict[str, Any] = meta or {}
+
+
 class LLMProvider(ABC):
     """Abstract base for LLM providers that support structured extraction."""
 
@@ -105,18 +126,48 @@ class OpenAIProvider(LLMProvider):
                 response = self.client.beta.chat.completions.parse(**kwargs)
                 duration = time.monotonic() - start
 
+                # Compute token cost FIRST — usage is reported even when the
+                # response is a refusal or has parsed=None. Cost is then
+                # propagated through LLMProviderError on validation failures
+                # so DAILY_API_BUDGET_USD reflects what was actually spent.
+                usage = response.usage
+                input_tokens = usage.prompt_tokens if usage else 0
+                output_tokens = usage.completion_tokens if usage else 0
+                cost = self._compute_cost(input_tokens, output_tokens)
+                partial_meta: dict[str, Any] = {
+                    "cost_usd": cost,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "duration_s": duration,
+                    "model": self.model,
+                    "attempt": attempt,
+                }
+
                 # Refusal check — mandatory before model_validate
                 msg = response.choices[0].message
                 if msg.refusal:
-                    raise ValueError(f"OpenAI refused request: {msg.refusal}")
+                    raise LLMProviderError(
+                        f"OpenAI refused request: {msg.refusal}",
+                        cost_usd=cost,
+                        meta=partial_meta,
+                    )
 
                 parsed = msg.parsed
                 if parsed is None:
-                    raise ValueError(
-                        "OpenAI returned None parsed result — model may have encountered an issue"
+                    raise LLMProviderError(
+                        "OpenAI returned None parsed result — model may have encountered an issue",
+                        cost_usd=cost,
+                        meta=partial_meta,
                     )
 
-                result = schema.model_validate(parsed)
+                try:
+                    result = schema.model_validate(parsed)
+                except Exception as exc:
+                    raise LLMProviderError(
+                        f"Structured output failed validation: {exc}",
+                        cost_usd=cost,
+                        meta=partial_meta,
+                    ) from exc
 
                 # Warn on empty languages list — helps detect silent schema-generator
                 # failures without modifying schemas.py.
@@ -129,19 +180,7 @@ class OpenAIProvider(LLMProvider):
                         schema.__name__,
                     )
 
-                usage = response.usage
-                input_tokens = usage.prompt_tokens if usage else 0
-                output_tokens = usage.completion_tokens if usage else 0
-                cost = self._compute_cost(input_tokens, output_tokens)
-
-                meta: dict[str, Any] = {
-                    "cost_usd": cost,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "duration_s": duration,
-                    "model": self.model,
-                    "attempt": attempt,
-                }
+                meta: dict[str, Any] = dict(partial_meta)
                 logger.info(
                     "LLM call OK — model=%s tokens=%d+%d cost=$%.4f attempt=%d",
                     self.model,
@@ -179,8 +218,9 @@ class OpenAIProvider(LLMProvider):
                 if attempt < len(delays) - 1:
                     time.sleep(delay)
 
-            except ValueError:
-                # Refusal and None-parsed are permanent — do not retry.
+            except LLMProviderError:
+                # Refusal, None-parsed, and validation failures are permanent —
+                # do not retry. Cost has already been attached to the exception.
                 raise
 
             except Exception as exc:

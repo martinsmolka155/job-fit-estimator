@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.parser import ResumeParser
 from src.schemas import Education, Experience, Resume, Skill
 
@@ -163,3 +165,28 @@ class TestResumeParser:
 
         assert isinstance(result, Resume)
         assert meta.get("error") == "llm_failed"
+
+
+def test_parser_preserves_cost_on_llm_provider_error() -> None:
+    """Parser must propagate the partial cost from LLMProviderError so a
+    refusal / validation failure after token spend doesn't show as $0.
+    """
+    from unittest.mock import MagicMock
+
+    from src.llm_provider import LLMProviderError
+    from src.parser import ResumeParser
+
+    llm = MagicMock()
+    llm.extract_structured.side_effect = LLMProviderError(
+        "refused",
+        cost_usd=0.0017,
+        meta={"input_tokens": 800, "output_tokens": 30, "model": "gpt-4o-mini"},
+    )
+    parser = ResumeParser(llm)
+
+    _resume, meta = parser.parse("dummy CV text")
+
+    assert meta["error"] == "llm_failed"
+    assert meta["cost_usd"] == pytest.approx(0.0017)
+    # Token detail from the failed call surfaces too — operator can investigate.
+    assert meta["input_tokens"] == 800

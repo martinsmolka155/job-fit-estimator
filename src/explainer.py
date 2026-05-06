@@ -11,7 +11,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from src.llm_provider import LLMProvider
+from src.llm_provider import LLMProvider, LLMProviderError
 from src.paths import EXPLAINER_PROMPT_PATH as _PROMPT_PATH
 from src.schemas import Explanation, Resume, SalaryEstimate, SeniorityScore
 
@@ -121,6 +121,16 @@ class Explainer:
                     prompt, Explanation, max_tokens=4096
                 )
                 explanation = cast("Explanation", raw_explanation)
+            except LLMProviderError as exc:
+                logger.exception("LLM call failed on explainer attempt %d", attempt + 1)
+                # Preserve partial cost so retries don't silently burn the budget.
+                last_meta = {
+                    **exc.meta,
+                    "cost_usd": exc.cost_usd,
+                    "error": "llm_failed",
+                    "retries": attempt + 1,
+                }
+                continue
             except Exception:
                 logger.exception("LLM call failed on explainer attempt %d", attempt + 1)
                 last_meta = {"cost_usd": 0.0, "error": "llm_failed", "retries": attempt + 1}

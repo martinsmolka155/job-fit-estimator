@@ -287,8 +287,13 @@ class TestLocationMultiplier:
             f"Ostrava mid ({result_ostrava.mid}) should be below no-location mid ({result_no_loc.mid})"
         )
 
-    def test_remote_eu_multiplier_applied(self) -> None:
-        """Remote EU should yield higher estimate than no location (×1.10)."""
+    def test_plain_remote_no_multiplier(self) -> None:
+        """Plain 'remote' (no country qualifier) is treated as CZ employer with ×1.0.
+
+        The previous Remote-EU / Remote-US multipliers were retired — they
+        violated the README's CZ-only contract. Country-qualified remote
+        locations now hard-fail at the non-CZ guard (covered separately).
+        """
         salary_data = _make_salary_data()
         loader = _make_mock_loader(salary_data)
         estimator = SalaryEstimator(ispv_loader=loader)
@@ -298,10 +303,10 @@ class TestLocationMultiplier:
             _make_resume_with_isco(isco_code="2512", location=None), score
         )
         result_remote = estimator.estimate(
-            _make_resume_with_isco(isco_code="2512", location="Remote EU"), score
+            _make_resume_with_isco(isco_code="2512", location="remote"), score
         )
 
-        assert result_remote.mid > result_no_loc.mid
+        assert result_remote.mid == result_no_loc.mid
 
     def test_unknown_location_no_multiplier(self) -> None:
         """CZ city not in the multiplier table should default to ×1.00."""
@@ -550,14 +555,27 @@ class TestNonCZLocationGuard:
         with pytest.raises(ISPVLookupError, match="CZ trh"):
             estimator.estimate(resume, _make_score(70.0))
 
-    def test_remote_eu_passes(self) -> None:
-        """'Remote EU' (no specific non-CZ country) passes — remote without country = CZ employer."""
+    def test_remote_eu_raises(self) -> None:
+        """'Remote EU' implies non-CZ employer — must hard-fail per CZ-only contract.
+
+        The previous behavior (pass + ×1.10 multiplier) violated the README
+        and silently produced CZK estimates for the wrong market.
+        """
         loader = _make_mock_loader(_make_salary_data())
         estimator = SalaryEstimator(ispv_loader=loader)
         resume = _make_resume_with_isco(isco_code="2512", location="Remote EU")
 
-        result = estimator.estimate(resume, _make_score(70.0))
-        assert result.currency == "CZK"
+        with pytest.raises(ISPVLookupError, match="CZ trh"):
+            estimator.estimate(resume, _make_score(70.0))
+
+    def test_europe_remote_raises(self) -> None:
+        """'Europe remote' must hard-fail (same contract as Remote EU)."""
+        loader = _make_mock_loader(_make_salary_data())
+        estimator = SalaryEstimator(ispv_loader=loader)
+        resume = _make_resume_with_isco(isco_code="2512", location="Europe remote")
+
+        with pytest.raises(ISPVLookupError, match="CZ trh"):
+            estimator.estimate(resume, _make_score(70.0))
 
     def test_bratislava_raises(self) -> None:
         """Bratislava (Slovakia) must raise — neighboring country, not CZ."""

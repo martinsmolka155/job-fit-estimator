@@ -133,8 +133,12 @@ class Pipeline:
         configure_logging()
         bind_run_id(run_id)
 
-        # Pre-flight budget check — rough estimate per CV to catch runaway spend early.
-        check_budget(estimated_cost_usd=0.05)
+        # Pre-flight budget reservation. README documents per-CV cost at
+        # ~$0.001-0.002 with gpt-4o-mini and ~$0.02-0.04 with gpt-4o; reserve
+        # the gpt-4o-mini ceiling × 2.5 for safety so a single $5 budget still
+        # admits ~1000 default runs while preventing runaway spend if many
+        # in-flight requests collide.
+        check_budget(estimated_cost_usd=0.005)
 
         wall_start = time.monotonic()
         meta: dict[str, Any] = {"steps": {}, "run_id": run_id}

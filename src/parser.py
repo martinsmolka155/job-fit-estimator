@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
-from src.llm_provider import LLMProvider
+from src.llm_provider import LLMProvider, LLMProviderError
 from src.paths import PARSER_PROMPT_PATH as _PROMPT_PATH
 from src.schemas import Resume
 
@@ -72,8 +72,15 @@ class ResumeParser:
 
         try:
             raw_resume, llm_meta = self.llm.extract_structured(full_prompt, Resume, max_tokens=4096)
-        except Exception:
+        except LLMProviderError as exc:
+            # Tokens were spent before refusal/validation failure. Preserve the
+            # cost so the daily budget log reflects real spend, not zero.
             logger.exception("LLM parsing failed, returning empty Resume")
+            resume = Resume(raw_text_length=len(text))
+            meta.update({**exc.meta, "cost_usd": exc.cost_usd, "error": "llm_failed"})
+            return resume, meta
+        except Exception:
+            logger.exception("LLM parsing failed (no token usage available)")
             resume = Resume(raw_text_length=len(text))
             meta.update({"cost_usd": 0.0, "error": "llm_failed"})
             return resume, meta
