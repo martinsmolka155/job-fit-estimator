@@ -1,8 +1,20 @@
 .env
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 *.pyc
 .venv/
+
+# OS / IDE / agent metadata
+.DS_Store
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Coverage HTML output (the cov-report=html target)
+htmlcov/
 tests/fixtures/*.pdf
 tests/fixtures/*.docx
 # Exception: real-world fixture is author's actual CV, not regenerable from
