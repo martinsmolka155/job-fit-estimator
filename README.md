@@ -106,6 +106,30 @@ Each one is a tradeoff, not a bug. They are visible to anyone reading the source
 
 See `docs/PRODUCTION_ROADMAP.md` for a sequenced plan of what one to two weeks vs one to two months of further work would unlock.
 
+## Personality traits — design note
+
+The brief mentions seniority as a composite of *"skills, experience, **personality traits**, and education"*. The scorer in this MVP covers four of the five explicitly:
+
+| Brief factor       | Scorer component       | Status |
+|--------------------|------------------------|--------|
+| Skills             | `Skill` (25%)          | ✓      |
+| Experience         | `Experience` (40%)     | ✓      |
+| Education          | `Education` (10%)      | ✓      |
+| Personality traits | — (not directly modeled) | ⚠ proxied |
+| (added)            | `Progression` (15%)    | proxy for ambition / drive |
+| (added)            | `DomainExpertise` (10%) | proxy for focus / specialization |
+
+Personality traits were intentionally **not** extracted from CV text because the signal is unreliable: self-descriptions ("team player", "detail-oriented") are near-universal and adversarially gameable, and extracting traits from project descriptions would amount to LLM guessing without grounding.
+
+Instead, two indirect proxies are scored from objective CV data:
+
+- **Progression** — counts upward seniority moves across roles. A candidate who moved Junior → Medior → Senior over 8 years signals drive and the ability to grow within an organization, regardless of how they describe themselves.
+- **DomainExpertise** — fewer distinct role types in the CV scores higher (focused career), more distinct types scores lower (scattered). This is a proxy for specialization depth.
+
+Both are explainable rule-based components — every score has a reasoning string visible in the UI breakdown.
+
+For production, real personality assessment would need either a separate questionnaire (Big Five, DISC) or labeled training data linking CV phrasing to validated trait inventories. Out of scope for this MVP.
+
 ## Project layout
 
 ```
