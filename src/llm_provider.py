@@ -27,6 +27,36 @@ _PRICING: dict[str, tuple[float, float]] = {
     "gpt-5": (1.25, 10.00),  # estimated — verify at openai.com/pricing
 }
 
+# Typical token usage per pipeline run, derived from observed eval logs:
+# parser receives ~5 kCV-text + prompt tokens, emits ~1 k structured output;
+# explainer receives ~1 k context + prompt, emits ~0.7 k recommendations.
+# Multiplied by a 2.5× safety margin so a single $5 budget admits ~1000 runs
+# on gpt-4o-mini and still catches runaway spend on gpt-4o (~$0.05 reserved).
+_TYPICAL_PARSE_INPUT_TOKENS = 5_000
+_TYPICAL_PARSE_OUTPUT_TOKENS = 1_000
+_TYPICAL_EXPLAIN_INPUT_TOKENS = 1_500
+_TYPICAL_EXPLAIN_OUTPUT_TOKENS = 700
+_RESERVATION_SAFETY_MARGIN = 2.5
+
+
+def _model_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Lookup model price and compute USD for a given token mix."""
+    input_price, output_price = _PRICING.get(model, _PRICING["gpt-4o-mini"])
+    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+
+
+def estimate_run_cost_usd(parser_model: str, explainer_model: str) -> float:
+    """Best-effort upper-bound cost for one pipeline run.
+
+    Used by the pipeline's pre-flight budget check so the daily cap reserves
+    realistic spend, not a flat $0.005 that under-counts gpt-4o by 10×.
+    """
+    parse = _model_cost_usd(parser_model, _TYPICAL_PARSE_INPUT_TOKENS, _TYPICAL_PARSE_OUTPUT_TOKENS)
+    explain = _model_cost_usd(
+        explainer_model, _TYPICAL_EXPLAIN_INPUT_TOKENS, _TYPICAL_EXPLAIN_OUTPUT_TOKENS
+    )
+    return (parse + explain) * _RESERVATION_SAFETY_MARGIN
+
 
 class LLMProviderError(RuntimeError):
     """Raised when an LLM call returns a refusal, empty parse, or fails validation.

@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check . && uv run ruff format --check .
+
+      - name: Type check (pyright)
+        run: uv run pyright src/ api.py main.py tests/ ui/
+
+      - name: Tests (pytest)
+        env:
+          OPENAI_API_KEY: sk-test-not-real
+        run: uv run pytest tests/ -q

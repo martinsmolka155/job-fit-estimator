@@ -1,7 +1,7 @@
 """Rule-based seniority scorer.
 
 Produces SeniorityScore (0-100) from Resume via 5 weighted components.
-Anti-skill-inflation: cap 5 skills per category + inflation penalty (30+ skills, <5 with depth).
+Anti-skill-inflation: cap 5 skills per category + inflation penalty (>30 skills, <5 with depth).
 Contractor exception: no job-hopping penalty for profiles with any is_contractor=True experience.
 """
 
@@ -179,7 +179,7 @@ class ExperienceComponent:
 class SkillComponent:
     """Score based on skills breadth and depth. Weight: 0.25.
 
-    Anti-inflation: cap 5 skills per category, penalize resumes with 30+ skills but <5 with depth.
+    Anti-inflation: cap 5 skills per category, penalize resumes with >30 skills but <5 with depth.
     """
 
     @staticmethod
@@ -205,10 +205,10 @@ class SkillComponent:
         total = base_score + depth_bonus
         reasoning_suffix = ""
 
-        # Inflation penalty: >25 skills but <5 with depth
-        if len(resume.skills) > 25 and deep_skills < 5:
+        # Inflation penalty: >30 skills but <5 with depth
+        if len(resume.skills) > 30 and deep_skills < 5:
             total *= 0.7
-            reasoning_suffix = " | INFLATION PENALTY (30+ skills, <5 with depth)"
+            reasoning_suffix = " | INFLATION PENALTY (>30 skills, <5 with depth)"
 
         final_score = min(100.0, total)
 
@@ -252,6 +252,10 @@ class ProgressionComponent:
                 current_level = _SENIORITY_ORDER.get(exp.seniority_level, -1)
                 if current_level > prev_level and prev_level >= 0:
                     progressions += 1
+                # max() keeps the bar at the highest level reached so far —
+                # a temporary downward step (e.g. senior → contractor stint
+                # described as "medior") doesn't reset and let a later return
+                # to senior count as a fresh progression.
                 prev_level = max(prev_level, current_level)
 
         score = min(100.0, progressions * 30.0)
@@ -299,13 +303,17 @@ class EducationComponent:
         )
         base_score = float(_DEGREE_SCORES.get(best_edu.degree, 0))
 
-        # Determine primary occupation_family from the candidate's current role
-        # (ongoing jobs first, then most recent end_year, then start_year).
+        # Determine primary occupation_family from the candidate's current role.
+        # Ongoing roles (end_year=None) outrank finished ones, then we prefer
+        # the *longer-running* role on tie-break — a 6-year ongoing main job
+        # should beat a 1-year-old side gig that started later. Negating
+        # start_year inside the tuple flips the tie-break direction without
+        # breaking the descending sort applied to the outer fields.
         primary_family: str = "other"
 
         def _recency_key(exp: Experience) -> tuple[int, int, int]:
             is_current = 1 if exp.end_year is None else 0
-            return (is_current, exp.end_year or 0, exp.start_year or 0)
+            return (is_current, exp.end_year or 0, -(exp.start_year or 0))
 
         for exp in sorted(resume.experiences, key=_recency_key, reverse=True):
             if exp.occupation_family is not None:

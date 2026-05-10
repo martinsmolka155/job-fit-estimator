@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -50,15 +49,26 @@ class CostRecord:
     extras: dict[str, Any] = field(default_factory=lambda: {})
 
 
-def _budget_from_env(default: float = DEFAULT_BUDGET_USD) -> float:
-    raw = os.environ.get("DAILY_API_BUDGET_USD")
-    if not raw:
-        return default
+def _budget_from_settings() -> float:
+    """Return the daily API budget by re-reading Settings.
+
+    Re-instantiates Settings on every call rather than using the module-level
+    `settings` singleton — this keeps the budget responsive to monkeypatched
+    env vars in tests and to operator changes (e.g. .env edit + restart of
+    the worker but not of the importer process).
+    """
+    from pydantic import ValidationError
+
+    from src.config import Settings
+
     try:
-        return float(raw)
-    except ValueError:
-        logger.warning("Invalid DAILY_API_BUDGET_USD=%r; using default %.2f", raw, default)
-        return default
+        return Settings().daily_api_budget_usd
+    except ValidationError:
+        logger.warning(
+            "Invalid DAILY_API_BUDGET_USD; falling back to default $%.2f",
+            DEFAULT_BUDGET_USD,
+        )
+        return DEFAULT_BUDGET_USD
 
 
 def today_utc() -> str:
@@ -89,7 +99,7 @@ def check_budget(estimated_cost_usd: float, log_path: Path = DEFAULT_COST_LOG_PA
 
     Warn (log only) at 90%+ of budget consumed.
     """
-    budget = _budget_from_env()
+    budget = _budget_from_settings()
     spent = daily_spent(log_path)
     projected = spent + estimated_cost_usd
     if projected > budget:

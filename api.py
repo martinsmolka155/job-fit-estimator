@@ -11,8 +11,11 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -30,16 +33,42 @@ from src.salary_ispv import (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Job Fit & Salary Estimator API",
-    description="Analyzes a CV and returns seniority score, salary estimate, and recommendations.",
-    version="1.0.0",
-)
-
 # Hard cap on upload size — CVs are typically < 1 MB; 10 MB leaves headroom
 # for image-heavy designer portfolios while bounding memory/disk impact.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _CHUNK_SIZE = 64 * 1024  # 64 KB streaming chunks
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Validate startup config; do not pre-build a shared Pipeline.
+
+    Pipeline carries per-run state inside its SalaryEstimator (last_salary_*
+    fields), so a single shared instance behind concurrent /analyze requests
+    would leak that state across responses. The request handler builds a
+    fresh Pipeline per call and offloads .run() to a thread, which keeps the
+    event loop responsive without sharing mutable state.
+    """
+    if not settings.openai_api_key:
+        logger.warning("OPENAI_API_KEY not set; /analyze will return 503 until configured")
+    yield
+
+
+app = FastAPI(
+    title="Job Fit & Salary Estimator API",
+    description="Analyzes a CV and returns seniority score, salary estimate, and recommendations.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+def _build_pipeline() -> Pipeline:
+    """Construct a fresh Pipeline for one request (see lifespan note)."""
+    return Pipeline(
+        "openai",
+        parser_model=settings.parser_model,
+        explainer_model=settings.explainer_model,
+    )
 
 
 @app.get("/health")
@@ -81,16 +110,13 @@ async def analyze(cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
                 )
             tmp.write(chunk)
 
-    # Pipeline construction lives inside the try/finally so any init failure
-    # (missing settings, broken provider) still goes through the cleanup path
-    # and the temp upload doesn't leak to /tmp.
+    # Pipeline.run is fully synchronous (PDF parsing, sync OpenAI client,
+    # openpyxl). Running it directly on the event-loop coroutine would block
+    # every concurrent request on this worker. asyncio.to_thread offloads it
+    # to the default thread pool so the loop stays responsive.
     try:
-        pipeline = Pipeline(
-            "openai",
-            parser_model=settings.parser_model,
-            explainer_model=settings.explainer_model,
-        )
-        result = pipeline.run(tmp_path)
+        pipeline = _build_pipeline()
+        result = await asyncio.to_thread(pipeline.run, tmp_path)
     except BudgetExceededError as e:
         # Operational state — surface as 429 so callers can back off.
         raise HTTPException(status_code=429, detail=str(e)) from e

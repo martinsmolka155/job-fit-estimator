@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 
 from src.cost_tracker import (
+    DEFAULT_BUDGET_USD,
     BudgetExceededError,
     CostRecord,
-    _budget_from_env,  # pyright: ignore[reportPrivateUsage]
+    _budget_from_settings,  # pyright: ignore[reportPrivateUsage]
     check_budget,
     daily_spent,
     new_run_id,
@@ -165,21 +166,21 @@ class TestNewRunId:
         assert all(c in "0123456789abcdef" for c in run_id)
 
 
-class TestBudgetFromEnv:
+class TestBudgetFromSettings:
     def test_invalid_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """DAILY_API_BUDGET_USD with non-numeric value falls back to DEFAULT_BUDGET_USD."""
+        """Non-numeric DAILY_API_BUDGET_USD makes Settings raise; we fall back."""
         monkeypatch.setenv("DAILY_API_BUDGET_USD", "not_a_number")
-        result = _budget_from_env(default=5.0)
-        assert result == 5.0
+        result = _budget_from_settings()
+        assert result == pytest.approx(DEFAULT_BUDGET_USD)
 
     def test_valid_env_parsed_correctly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """DAILY_API_BUDGET_USD with valid float is parsed correctly."""
+        """DAILY_API_BUDGET_USD with valid float is loaded by Settings."""
         monkeypatch.setenv("DAILY_API_BUDGET_USD", "10.50")
-        result = _budget_from_env()
+        result = _budget_from_settings()
         assert result == pytest.approx(10.50)
 
-    def test_missing_env_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Missing DAILY_API_BUDGET_USD returns provided default."""
+    def test_missing_env_returns_settings_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Missing DAILY_API_BUDGET_USD falls through to the Settings field default."""
         monkeypatch.delenv("DAILY_API_BUDGET_USD", raising=False)
-        result = _budget_from_env(default=7.77)
-        assert result == pytest.approx(7.77)
+        result = _budget_from_settings()
+        assert result == pytest.approx(DEFAULT_BUDGET_USD)

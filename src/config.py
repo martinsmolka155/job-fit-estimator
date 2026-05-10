@@ -15,12 +15,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     provider: Literal["openai"] = "openai"
     parser_model: str = "gpt-4o-mini"
-    explainer_model: str = "gpt-4o-mini"  # Phase 22: reverted from gpt-5-mini after reasoning-token + slowness issues; salary research stays on gpt-5-mini where reasoning helps
-    salary_research_model: str = "gpt-5-mini"  # NEW (Phase 22)
-    salary_research_fallback: str = "gpt-5"  # NEW (Phase 22)
-    embedding_model: str = "text-embedding-3-small"  # already used in OpenAIProvider.embed
-    tavily_search_depth: str = "basic"  # NEW (1 credit per call; "advanced" = 2)
-    tavily_api_key: str = ""  # NEW (read from TAVILY_API_KEY env)
+    explainer_model: str = "gpt-4o-mini"
+    daily_api_budget_usd: float = 5.00
 
 
 settings = Settings()

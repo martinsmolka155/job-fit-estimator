@@ -54,9 +54,6 @@ _LOCATION_MULTIPLIERS: dict[str, tuple[float, str]] = {
 # also appears (e.g. "Remote US", "Czech expat in Berlin").
 _NON_CZ_COUNTRIES_RE = re.compile(
     r"\b("
-    # Cross-border remote indicators — "Remote EU", "Europe remote", etc.
-    # all imply non-CZ employer; the README contract says hard-fail.
-    r"eu|europe|european|"
     # Germany
     r"germany|german|deutschland|berlin|hamburg|münchen|munchen|munich|frankfurt|cologne|"
     # Poland
@@ -175,15 +172,17 @@ class SalaryEstimator:
             )
 
         # Pick ISCO from the candidate's primary current role.
-        # Sort key: ongoing role first (end_year is None), then by end_year desc,
-        # then by start_year desc (longer current tenure outranks short side gigs).
+        # Sort key: ongoing role first (end_year=None), then by end_year desc,
+        # then prefer the *longer*-running tenure on tie-break — a 6-year main
+        # job should outrank a 1-year side gig that started later. Negating
+        # start_year flips the tie-break inside the descending sort.
         isco_code: str | None = None
 
         def _recency_key(exp: object) -> tuple[int, int, int]:
             end = getattr(exp, "end_year", None)
             start = getattr(exp, "start_year", 0) or 0
             is_current = 1 if end is None else 0
-            return (is_current, end or 0, start)
+            return (is_current, end or 0, -start)
 
         for exp in sorted(resume.experiences, key=_recency_key, reverse=True):
             if exp.isco_code:

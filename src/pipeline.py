@@ -25,7 +25,7 @@ from src.cost_tracker import (
 from src.estimator import SalaryEstimator
 from src.explainer import Explainer
 from src.extractor import UnsupportedFormatError, extract_text
-from src.llm_provider import get_provider
+from src.llm_provider import estimate_run_cost_usd, get_provider
 from src.logging_config import bind_run_id, configure_logging
 from src.parser import ResumeParser
 from src.paths import INFLATION_FACTORS_PATH, ISPV_XLSX_PATH
@@ -133,12 +133,16 @@ class Pipeline:
         configure_logging()
         bind_run_id(run_id)
 
-        # Pre-flight budget reservation. README documents per-CV cost at
-        # ~$0.001-0.002 with gpt-4o-mini and ~$0.02-0.04 with gpt-4o; reserve
-        # the gpt-4o-mini ceiling × 2.5 for safety so a single $5 budget still
-        # admits ~1000 default runs while preventing runaway spend if many
-        # in-flight requests collide.
-        check_budget(estimated_cost_usd=0.005)
+        # Pre-flight budget reservation, scaled to the actual model selection.
+        # Flat $0.005 used to under-count gpt-4o (real cost ~$0.04) by ~8×;
+        # estimate_run_cost_usd looks up parser+explainer pricing and adds a
+        # 2.5× safety margin so the daily cap reflects realistic worst-case
+        # spend across the configured models.
+        reservation = estimate_run_cost_usd(
+            parser_model=getattr(self._parser_llm, "model", "gpt-4o-mini"),
+            explainer_model=getattr(self._explainer_llm, "model", "gpt-4o-mini"),
+        )
+        check_budget(estimated_cost_usd=reservation)
 
         wall_start = time.monotonic()
         meta: dict[str, Any] = {"steps": {}, "run_id": run_id}

@@ -100,7 +100,6 @@ class Resume(BaseModel):
     skills: list[Skill] = Field(
         default_factory=list, description="All extracted skills (deduplicated)"
     )
-    summary: str | None = Field(default=None, description="Professional summary from CV")
     raw_text_length: int = Field(
         default=0, description="Character count of source text used for parsing"
     )
@@ -156,9 +155,15 @@ class Recommendation(BaseModel):
     title: str = Field(description="Short actionable title, e.g. 'Master Kubernetes in production'")
     why_it_matters: str = Field(description="1-2 sentences on why this recommendation, not others")
     estimated_salary_impact_pct: float = Field(
-        description="Realistic salary uplift estimate in percent (5-15 typical per recommendation)"
+        ge=0,
+        le=100,
+        description="Realistic salary uplift estimate in percent (5-15 typical per recommendation)",
     )
-    timeframe_months: int = Field(description="Expected months to achieve this recommendation")
+    timeframe_months: int = Field(
+        ge=1,
+        le=60,
+        description="Expected months to achieve this recommendation",
+    )
     first_action: str = Field(description="Concrete step the candidate can take tomorrow morning")
 
 

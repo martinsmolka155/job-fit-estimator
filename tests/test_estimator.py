@@ -555,27 +555,22 @@ class TestNonCZLocationGuard:
         with pytest.raises(ISPVLookupError, match="CZ trh"):
             estimator.estimate(resume, _make_score(70.0))
 
-    def test_remote_eu_raises(self) -> None:
-        """'Remote EU' implies non-CZ employer — must hard-fail per CZ-only contract.
+    def test_eu_token_alone_does_not_raise(self) -> None:
+        """Bare 'EU'/'europe' tokens are too weak to hard-fail the lookup.
 
-        The previous behavior (pass + ×1.10 multiplier) violated the README
-        and silently produced CZK estimates for the wrong market.
+        Lots of legitimate CZ profiles describe themselves as 'EU citizen,
+        Praha-based' or carry strings like 'European Engineering Center,
+        Brno' in the location field. A specific country/city match (Berlin,
+        Bratislava, …) is still required to flip to non-CZ.
         """
         loader = _make_mock_loader(_make_salary_data())
         estimator = SalaryEstimator(ispv_loader=loader)
-        resume = _make_resume_with_isco(isco_code="2512", location="Remote EU")
-
-        with pytest.raises(ISPVLookupError, match="CZ trh"):
-            estimator.estimate(resume, _make_score(70.0))
-
-    def test_europe_remote_raises(self) -> None:
-        """'Europe remote' must hard-fail (same contract as Remote EU)."""
-        loader = _make_mock_loader(_make_salary_data())
-        estimator = SalaryEstimator(ispv_loader=loader)
-        resume = _make_resume_with_isco(isco_code="2512", location="Europe remote")
-
-        with pytest.raises(ISPVLookupError, match="CZ trh"):
-            estimator.estimate(resume, _make_score(70.0))
+        for location in ("Remote EU", "Europe remote", "European Center, Brno"):
+            resume = _make_resume_with_isco(isco_code="2512", location=location)
+            result = estimator.estimate(resume, _make_score(70.0))
+            assert result.currency == "CZK", (
+                f"{location!r} must not be classified as non-CZ on the EU token alone"
+            )
 
     def test_bratislava_raises(self) -> None:
         """Bratislava (Slovakia) must raise — neighboring country, not CZ."""
@@ -637,4 +632,43 @@ class TestExperienceRecencySelection:
 
         # Verify the loader was queried for the current main role's ISCO (2512),
         # not the short side gig's ISCO (5120).
+        loader.lookup.assert_called_with("2512")
+
+    def test_longer_ongoing_role_wins_over_later_started_ongoing(self) -> None:
+        """Two ongoing roles → the one started earlier (longer tenure) wins.
+
+        Regression for the recency_key tie-break: previously sorted ongoing
+        roles by start_year descending, so a fresh side gig started in 2024
+        outranked the 2018 main job. The fixed key flips the tie-break.
+        """
+        from src.schemas import Experience, Resume
+
+        long_main = Experience(
+            role_title="Backend Lead",
+            isco_code="2512",
+            occupation_family="it",
+            company="MainCorp",
+            start_year=2018,
+            end_year=None,
+        )
+        short_freelance = Experience(
+            role_title="Freelance Cook",
+            isco_code="5120",
+            occupation_family="services",
+            company="WeekendKitchen",
+            start_year=2024,
+            end_year=None,
+            is_contractor=True,
+        )
+        resume = Resume(
+            full_name="Test",
+            location=None,
+            experiences=[long_main, short_freelance],
+            raw_text_length=1000,
+        )
+
+        loader = _make_mock_loader(_make_salary_data(isco_code="2512"))
+        estimator = SalaryEstimator(ispv_loader=loader)
+        estimator.estimate(resume, _make_score(70.0))
+
         loader.lookup.assert_called_with("2512")

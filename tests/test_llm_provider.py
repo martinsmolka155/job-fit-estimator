@@ -12,7 +12,12 @@ import openai
 import pytest
 from pydantic import BaseModel
 
-from src.llm_provider import LLMProviderError, OpenAIProvider, get_provider
+from src.llm_provider import (
+    LLMProviderError,
+    OpenAIProvider,
+    estimate_run_cost_usd,
+    get_provider,
+)
 
 
 class _SimpleSchema(BaseModel):
@@ -328,3 +333,24 @@ class TestOpenAIProviderEmbed:
             _result, meta = provider.embed(["hello"])
 
         assert meta["cost_usd"] == pytest.approx(0.02)
+
+
+class TestEstimateRunCostUsd:
+    """Pre-flight reservation must scale with the configured model pricing."""
+
+    def test_mini_run_cost_under_one_cent(self) -> None:
+        """gpt-4o-mini round trip should reserve well under a cent."""
+        cost = estimate_run_cost_usd("gpt-4o-mini", "gpt-4o-mini")
+        assert 0 < cost < 0.01
+
+    def test_gpt4o_costs_at_least_an_order_of_magnitude_more_than_mini(self) -> None:
+        """gpt-4o pricing is ~17× gpt-4o-mini; reservation must reflect that."""
+        mini = estimate_run_cost_usd("gpt-4o-mini", "gpt-4o-mini")
+        full = estimate_run_cost_usd("gpt-4o", "gpt-4o")
+        assert full >= mini * 10
+
+    def test_unknown_model_falls_back_to_mini(self) -> None:
+        """Unknown model name must not crash — falls back to gpt-4o-mini pricing."""
+        cost = estimate_run_cost_usd("future-model-x", "future-model-y")
+        mini_cost = estimate_run_cost_usd("gpt-4o-mini", "gpt-4o-mini")
+        assert cost == pytest.approx(mini_cost)
