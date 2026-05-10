@@ -243,16 +243,28 @@ class SalaryEstimator:
         # 1.10 fits team lead roles (the bulk of is_management=True cases) without
         # overestimating full engineering managers / directors. Tier-based multiplier
         # (lead vs manager vs director) is a known backlog item.
-        management_mult = 1.10 if self._has_management(resume) else 1.0
+        #
+        # IMPORTANT: skip the multiplier when seniority is already lead/principal —
+        # those bands extrapolate above ISPV D9 (× 1.10 / 1.20 / 1.35 and × 1.30 /
+        # 1.50 / 1.75 respectively), which already absorbs the management upside.
+        # Stacking ×1.10 on top double-counts and pushes a CEO CV above 600 k CZK
+        # for the band's high — see eval golden-set principal overshoot.
+        is_top_band = seniority in ("lead", "principal")
+        management_mult = 1.10 if (self._has_management(resume) and not is_top_band) else 1.0
 
         low = round(band.low * location_mult * management_mult / 1000) * 1000
         mid = round(band.mid * location_mult * management_mult / 1000) * 1000
         high = round(band.high * location_mult * management_mult / 1000) * 1000
 
+        management_note = (
+            f"mgmt × {management_mult:.2f}"
+            if not is_top_band
+            else f"mgmt × 1.00 (already in {seniority} band extrapolation)"
+        )
         reasoning = (
             f"Zdroj: ISPV M8r 2025 (ISCO {salary_data.isco_code}, "
             f"{salary_data.isco_match_level}) | {seniority} band | "
-            f"location × {location_mult:.2f} | mgmt × {management_mult:.2f}"
+            f"location × {location_mult:.2f} | {management_note}"
         )
 
         return SalaryEstimate(
@@ -265,7 +277,14 @@ class SalaryEstimator:
                 f"Seniority band: {seniority} (score {score.total:.1f})",
                 f"ISCO code: {salary_data.isco_code} ({salary_data.isco_match_level})",
                 f"Location multiplier: × {location_mult:.2f}",
-                f"Management multiplier: × {management_mult:.2f}",
+                (
+                    f"Management multiplier: × {management_mult:.2f}"
+                    + (
+                        f" (skipped — {seniority} band already extrapolates above ISPV D9)"
+                        if is_top_band
+                        else ""
+                    )
+                ),
                 f"Dataset: {salary_data.source_dataset_version}",
             ],
         )

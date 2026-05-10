@@ -26,8 +26,6 @@ dist/
 *.egg-info/
 .coverage
 data/.cost_log.jsonl
-data/salary_cache/*.json
-!data/salary_cache/.gitkeep
 data/ispv_2025.xlsx
 # Internal dev artifacts — do not track
 tasks/

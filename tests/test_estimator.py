@@ -387,6 +387,50 @@ class TestManagementMultiplier:
         # Expected: 1.15 (Praha) × 1.10 (mgmt) = 1.265 → allow ±5 % rounding
         assert 1.20 <= ratio <= 1.33, f"Compound multiplier ratio out of range: {ratio:.3f}"
 
+    def test_management_multiplier_skipped_for_lead_band(self) -> None:
+        """Lead/principal bands extrapolate above D9 (×1.10/1.20/1.35) and already
+        absorb the management upside; stacking ×1.10 on top double-counts and
+        overshoots reality. Regression for the eval golden-set principal CV that
+        produced 691 k CZK before the fix.
+        """
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+        # score 85 → lead band per _score_to_seniority
+        lead_score = _make_score(85.0)
+
+        result_lead_no_mgmt = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", has_management=False), lead_score
+        )
+        result_lead_with_mgmt = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", has_management=True), lead_score
+        )
+
+        assert result_lead_with_mgmt.mid == result_lead_no_mgmt.mid, (
+            "Lead band must NOT add management multiplier — D9×1.20 already absorbs it"
+        )
+
+    def test_management_multiplier_skipped_for_principal_band(self) -> None:
+        """Same as lead — principal band uses D9 × 1.30/1.50/1.75; mgmt stacking
+        would push estimates well past any plausible CZ market level.
+        """
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+        # score 95 → principal band
+        principal_score = _make_score(95.0)
+
+        result_no_mgmt = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", has_management=False), principal_score
+        )
+        result_with_mgmt = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", has_management=True), principal_score
+        )
+
+        assert result_with_mgmt.high == result_no_mgmt.high, (
+            "Principal band must NOT add management multiplier — D9×1.75 already absorbs it"
+        )
+
 
 # ---------------------------------------------------------------------------
 # last_salary_source / last_salary_data
