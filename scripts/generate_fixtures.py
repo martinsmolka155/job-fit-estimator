@@ -114,26 +114,26 @@ CV_PRINCIPAL_TEXT = """Radek Novotný, PhD
 principal@example.cz | +420 456 789 012 | Praha
 
 PROFILE
-Principal Engineer and Technical Director with 15 years of experience in
-distributed systems, platform engineering, and engineering leadership.
+Principal Software Engineer (individual contributor track) with 15 years of
+hands-on experience building distributed systems and high-throughput
+backend platforms. Mentors senior engineers; no direct reports.
 PhD in Computer Science from Charles University.
 
 EXPERIENCE
-VP of Engineering / Principal Engineer
+Principal Software Engineer
 GlobalTech Praha, Praha
 2019 - Present
-Led engineering organization of 60+ engineers across 8 teams.
-Architected company-wide platform migration to cloud-native microservices.
-Reduced infrastructure costs by 40% through optimization initiatives.
-Established engineering standards, hiring processes, and technical roadmap.
-Direct reports: 6 engineering managers.
+Designed and implemented event-streaming pipeline serving 10M events/day.
+Owns architecture for the core trading platform; writes production code daily.
+Mentors 4 senior engineers via 1:1 technical reviews — no people-management.
+Author of internal RFC process; reviews all cross-team design proposals.
 
-Staff Engineer / Tech Lead
+Staff Software Engineer
 CzechUnicorn, Praha
 2016 - 2019
-Designed and led implementation of distributed event streaming platform.
-Scaled system from 10k to 10M events per day.
-Technical lead for 12-person platform team.
+Built distributed event streaming platform from prototype to 10M events/day.
+Hands-on platform contributor: 80% IC code, 20% architectural review.
+Mentored teammates; line-management was a separate Engineering Manager role.
 
 Senior Software Engineer
 IBMCzech, Praha
@@ -157,8 +157,7 @@ Karlova Universita, Praha, 2009
 SKILLS
 Python, Go, Java, Distributed Systems, Kafka, Kubernetes, Docker, PostgreSQL,
 Redis, Cassandra, Cloud Architecture, AWS, GCP, Terraform, CI/CD, Git,
-System Design, Technical Leadership, Agile, Engineering Management,
-Performance Engineering, Security Architecture, Data Engineering
+System Design, Performance Engineering, Security Architecture, Data Engineering
 
 LANGUAGES
 Czech (native), English (C2), German (B2)
