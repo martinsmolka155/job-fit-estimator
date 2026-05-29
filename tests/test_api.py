@@ -26,6 +26,9 @@ from src.salary_ispv import (
 
 @pytest.fixture
 def client() -> TestClient:
+    # Reset the process-local rate limiter so per-test upload counts do not
+    # accumulate across the session (all TestClient requests share one IP key).
+    api.rate_limiter.reset()
     return TestClient(api.app)
 
 
@@ -123,6 +126,23 @@ def test_pipeline_infrastructure_error_returns_502(client: TestClient) -> None:
 
     assert response.status_code == 502
     assert "OpenAI outage" in response.json()["detail"]
+
+
+def test_rate_limit_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client over its per-IP quota gets 429 with a Retry-After header."""
+    from src.rate_limit import SlidingWindowRateLimiter
+
+    monkeypatch.setattr(
+        api, "rate_limiter", SlidingWindowRateLimiter(max_requests=1, window_seconds=3600)
+    )
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.return_value.model_dump.return_value = {"ok": True}
+        first = _upload(client)
+        second = _upload(client)
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert int(second.headers["Retry-After"]) >= 1
 
 
 def test_oversized_upload_returns_413(client: TestClient) -> None:

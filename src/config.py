@@ -18,5 +18,11 @@ class Settings(BaseSettings):
     explainer_model: str = "gpt-4o-mini"
     daily_api_budget_usd: float = 5.00
 
+    # Per-client (per-IP) rate limit for the public HTTP API. Defaults to a few
+    # analyses per hour — generous for a real user, tight enough that a single
+    # client cannot drain the daily budget on its own.
+    rate_limit_max_requests: int = 5
+    rate_limit_window_seconds: int = 3600
+
 
 settings = Settings()

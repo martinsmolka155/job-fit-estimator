@@ -19,11 +19,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 
 from src.config import settings
 from src.cost_tracker import BudgetExceededError
 from src.pipeline import Pipeline, PipelineInfrastructureError
+from src.rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
 from src.salary_ispv import (
     ISPVDataMissingError,
     ISPVLookupError,
@@ -37,6 +38,29 @@ logger = logging.getLogger(__name__)
 # for image-heavy designer portfolios while bounding memory/disk impact.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _CHUNK_SIZE = 64 * 1024  # 64 KB streaming chunks
+
+# Per-IP rate limiter (process-local). Complements the per-day budget guard in
+# src.cost_tracker: the budget caps total daily spend, this caps how fast one
+# client can consume it. Rebuilt from settings at import time.
+rate_limiter = SlidingWindowRateLimiter(
+    max_requests=settings.rate_limit_max_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+)
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP, trusting the left-most X-Forwarded-For hop.
+
+    The service runs behind a single trusted nginx proxy that sets
+    X-Forwarded-For, so the first entry is the real client. Without a trusted
+    proxy this header is spoofable; revisit if the topology changes.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
 
 
 @asynccontextmanager
@@ -78,8 +102,19 @@ def health() -> dict[str, str]:
 
 
 @app.post("/analyze")
-async def analyze(cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
+async def analyze(request: Request, cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
     """Analyze a CV (PDF or DOCX) and return the structured pipeline result."""
+    # Rate-limit first: reject abusive clients before touching the upload body
+    # or the (cost-bearing) pipeline.
+    try:
+        rate_limiter.check(_client_ip(request))
+    except RateLimitExceeded as e:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please try again later.",
+            headers={"Retry-After": str(e.retry_after_seconds)},
+        ) from e
+
     filename = cv.filename or "upload"
     suffix = Path(filename).suffix.lower()
     if suffix not in (".pdf", ".docx"):
