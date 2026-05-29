@@ -1,16 +1,24 @@
 """Rule-based seniority scorer.
 
 Produces SeniorityScore (0-100) from Resume via 5 weighted components.
-Anti-skill-inflation: cap 5 skills per category + inflation penalty (>30 skills, <5 with depth).
-Contractor exception: no job-hopping penalty for profiles with any is_contractor=True experience.
+Anti-skill-inflation: count up to 12 distinct skills on a curve + penalty for
+>30 buzzwords with no depth signal and no years_used corroboration.
+Contractor exception: no job-hopping penalty for profiles with any is_contractor=True.
+Progression: infers advancement also from total experience + role breadth, not
+solely from explicit "Senior/Lead" title words.
+Domain: 2 domains is NOT a hard penalty — cross-domain expertise is often a premium.
 """
 
 from __future__ import annotations
 
-from collections import Counter
 from datetime import UTC, datetime
 
 from src.schemas import Experience, Resume, ScoreComponent, SeniorityScore
+
+# TODO(review): All heuristic constants below were set by design reasoning,
+# not statistical calibration against a labeled CV dataset. Once ground-truth
+# seniority labels (N ≥ 200 CVs) are available, re-fit thresholds empirically
+# (e.g. isotonic regression on component scores vs. salary bands).
 
 
 def _current_year() -> int:
@@ -29,11 +37,29 @@ _WEIGHT_PROGRESSION = 0.15
 _WEIGHT_EDUCATION = 0.10
 _WEIGHT_DOMAIN = 0.10
 
+# Czech display labels for each component — shown verbatim to end users.
+_LABEL_EXPERIENCE = "Pracovní zkušenosti"
+_LABEL_SKILLS = "Dovednosti"
+_LABEL_PROGRESSION = "Postup v kariéře"
+_LABEL_EDUCATION = "Vzdělání"
+_LABEL_DOMAIN = "Zaměření oboru"
+
+# Czech degree labels for education reasoning
+_DEGREE_CZ: dict[str, str] = {
+    "phd": "doktorát (PhD)",
+    "master": "magisterský titul (Mgr./Ing.)",
+    "bachelor": "bakalářský titul (Bc.)",
+    "high_school": "středoškolské s maturitou (příp. VOŠ / DiS.)",
+    "other": "výuční list nebo jiné vzdělání bez maturity",
+    "none": "neuvedeno",
+}
+
 # Education degree scores
 _DEGREE_SCORES = {
     "phd": 100,
     "master": 75,
     "bachelor": 50,
+    "high_school": 40,  # maturita / SŠ / VOŠ — a real qualification, not "other"
     "other": 25,
     "none": 0,
 }
@@ -133,10 +159,10 @@ class ExperienceComponent:
     def compute(resume: Resume) -> ScoreComponent:
         if not resume.experiences:
             return ScoreComponent(
-                name="ExperienceComponent",
+                name=_LABEL_EXPERIENCE,
                 score=0.0,
                 weight=_WEIGHT_EXPERIENCE,
-                reasoning="No experience entries found",
+                reasoning="V CV nejsou žádné pracovní zkušenosti.",
             )
 
         # Merge overlapping intervals before summing — parallel roles
@@ -164,12 +190,15 @@ class ExperienceComponent:
         bonus = 10.0 if has_senior_role else 0.0
         final_score = min(100.0, base_score + bonus)
 
-        reasoning = f"{total_years} total years of experience → base score {base_score:.0f}" + (
-            " | +10 senior/lead role bonus" if has_senior_role else ""
-        )
+        # Build Czech reasoning
+        years_text = f"{total_years} {'rok' if total_years == 1 else 'roky' if 2 <= total_years <= 4 else 'let'} praxe"
+        if has_senior_role:
+            reasoning = f"{years_text}, z toho část na seniorní nebo vedoucí roli."
+        else:
+            reasoning = f"{years_text} celkem."
 
         return ScoreComponent(
-            name="ExperienceComponent",
+            name=_LABEL_EXPERIENCE,
             score=final_score,
             weight=_WEIGHT_EXPERIENCE,
             reasoning=reasoning,
@@ -179,46 +208,83 @@ class ExperienceComponent:
 class SkillComponent:
     """Score based on skills breadth and depth. Weight: 0.25.
 
-    Anti-inflation: cap 5 skills per category, penalize resumes with >30 skills but <5 with depth.
+    Redesign rationale vs. v1:
+    - Old: cap 5/category × few LLM categories → collapses to base 20, depth tag never fires.
+    - New: count up to 12 DISTINCT skills across all categories on a curve (score reaches
+      base 70 at 12 skills). "Depth" is corroborated: explicit advanced/expert tag OR
+      years_used >= 3 for a skill both count. This fires more reliably on real CVs.
+    - Anti-inflation guard: >30 skills with no depth OR years corroboration applies 0.7×.
+
+    TODO(review): The curve (12 skills → 70) and depth-bonus constants need calibration
+    against a labeled dataset to verify discrimination between junior/senior populations.
     """
 
     @staticmethod
     def compute(resume: Resume) -> ScoreComponent:
         if not resume.skills:
             return ScoreComponent(
-                name="SkillComponent",
+                name=_LABEL_SKILLS,
                 score=0.0,
                 weight=_WEIGHT_SKILLS,
-                reasoning="No skills found",
+                reasoning="V CV nejsou uvedeny žádné dovednosti.",
             )
 
-        # Cap 5 per category to prevent inflation
-        per_category = Counter(s.category for s in resume.skills)
-        capped_count = sum(min(5, n) for n in per_category.values())
+        total_skills = len(resume.skills)
 
-        base_score = min(70.0, capped_count * 4.0)  # base capped at 70
+        # Count effective (deduplicated) skills — cap at 12 to prevent buzzword inflation.
+        # Using distinct names (case-insensitive) across all categories.
+        distinct_names = {s.name.lower() for s in resume.skills}
+        effective_count = min(12, len(distinct_names))
 
-        # Quality bonus from deep skills
-        deep_skills = sum(1 for s in resume.skills if s.depth in ("advanced", "expert"))
-        depth_bonus = min(20.0, deep_skills * 3.0)
+        # Curve: linear up to 70 at 12 skills (≈5.83 per skill)
+        base_score = min(70.0, effective_count * (70.0 / 12.0))
+
+        # Depth: skill counts as "deep" if it has explicit advanced/expert tag
+        # OR years_used >= 3 (corroboration from experience duration).
+        deep_skills = sum(
+            1
+            for s in resume.skills
+            if s.depth in ("advanced", "expert") or (s.years_used is not None and s.years_used >= 3)
+        )
+        # Modest bonus — max 20 points at 5+ deep skills
+        depth_bonus = min(20.0, deep_skills * 4.0)
 
         total = base_score + depth_bonus
-        reasoning_suffix = ""
+        inflation_applied = False
 
-        # Inflation penalty: >30 skills but <5 with depth
-        if len(resume.skills) > 30 and deep_skills < 5:
+        # Inflation guard: >30 skills but fewer than 3 have any depth signal
+        if total_skills > 30 and deep_skills < 3:
             total *= 0.7
-            reasoning_suffix = " | INFLATION PENALTY (>30 skills, <5 with depth)"
+            inflation_applied = True
 
         final_score = min(100.0, total)
 
-        reasoning = (
-            f"Capped skill count: {capped_count} (from {len(resume.skills)} raw) → "
-            f"base {base_score:.0f} + depth bonus {depth_bonus:.0f}" + reasoning_suffix
+        # Czech reasoning — no math, just facts
+        skill_word = (
+            "dovednost"
+            if effective_count == 1
+            else "dovednosti"
+            if 2 <= effective_count <= 4
+            else "dovedností"
         )
+        if effective_count == total_skills:
+            breadth_text = f"{effective_count} relevantních {skill_word}"
+        else:
+            breadth_text = f"{effective_count} relevantních {skill_word} (z {total_skills} celkem)"
+
+        if deep_skills > 0:
+            depth_text = (
+                f"; u {deep_skills} z nich je doložena pokročilá úroveň nebo dlouholetá praxe"
+            )
+        else:
+            depth_text = "; v CV chybí signál o pokročilé úrovni"
+
+        reasoning = breadth_text + depth_text + "."
+        if inflation_applied:
+            reasoning += " (Pozor: příliš mnoho dovedností bez doložené hloubky — možná inflace.)"
 
         return ScoreComponent(
-            name="SkillComponent",
+            name=_LABEL_SKILLS,
             score=final_score,
             weight=_WEIGHT_SKILLS,
             reasoning=reasoning,
@@ -228,23 +294,31 @@ class SkillComponent:
 class ProgressionComponent:
     """Score based on career progression. Weight: 0.15.
 
-    Contractor exception: no job-hopping penalty if any experience has is_contractor=True.
+    Redesign rationale vs. v1:
+    - Old: needed explicit "Senior/Lead" word in seniority_level → many real seniors get 0.
+    - New: infer progression also from total years + number of distinct roles over time.
+      "Experienced breadth" path: 8+ years across 3+ distinct employers also signals
+      seniority advancement even without an explicit seniority_level tag.
+    - Contractor exception and job-hopping penalty preserved.
+
+    TODO(review): The breadth/years thresholds (8 years, 3 roles) need validation
+    against real data — they are currently set by heuristic reasoning.
     """
 
     @staticmethod
     def compute(resume: Resume) -> ScoreComponent:
         if not resume.experiences:
             return ScoreComponent(
-                name="ProgressionComponent",
+                name=_LABEL_PROGRESSION,
                 score=0.0,
                 weight=_WEIGHT_PROGRESSION,
-                reasoning="No experience entries found",
+                reasoning="V CV nejsou žádné pracovní zkušenosti.",
             )
 
         # Sort by start_year ascending
         sorted_exps = sorted(resume.experiences, key=lambda e: e.start_year)
 
-        # Count upward progressions in seniority level
+        # --- Path A: explicit seniority progression ---
         progressions = 0
         prev_level = -1
         for exp in sorted_exps:
@@ -258,14 +332,67 @@ class ProgressionComponent:
                 # to senior count as a fresh progression.
                 prev_level = max(prev_level, current_level)
 
-        score = min(100.0, progressions * 30.0)
-        reasoning = f"{progressions} upward seniority progressions → score {score:.0f}"
+        explicit_score = min(100.0, progressions * 35.0)
+
+        # --- Path B: inferred progression from breadth + tenure ---
+        # A candidate with 8+ de-duplicated years across 3+ distinct employers
+        # very likely progressed in responsibility even if titles don't say so.
+        current = _current_year()
+        intervals: list[tuple[int, int]] = sorted(
+            (exp.start_year, exp.end_year or current)
+            for exp in resume.experiences
+            if (exp.end_year or current) > exp.start_year
+        )
+        merged: list[tuple[int, int]] = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        total_years = max(0, sum(end - start for start, end in merged))
+
+        distinct_employers = len({exp.company for exp in resume.experiences})
+        has_management = any(exp.is_management for exp in resume.experiences)
+
+        inferred_score = 0.0
+        if total_years >= 8 and distinct_employers >= 3:
+            # Long, broad career without explicit progression labels — credit partial score
+            inferred_score = 40.0
+        elif total_years >= 5 and distinct_employers >= 2:
+            inferred_score = 20.0
+
+        if has_management:
+            inferred_score = min(100.0, inferred_score + 20.0)
+
+        # Take the better of explicit vs. inferred
+        score = max(explicit_score, inferred_score)
+
+        # --- Build Czech reasoning ---
+        if progressions > 0:
+            progression_text = (
+                f"{'Jeden posun' if progressions == 1 else f'{progressions} posuny'} "
+                f"na vyšší senioritu během kariéry."
+            )
+        elif inferred_score > 0:
+            progression_text = (
+                f"Bez explicitního titulového postupu, ale {total_years} let praxe "
+                f"u {distinct_employers} zaměstnavatelů signalizuje rostoucí odpovědnost."
+            )
+        else:
+            progression_text = "Bez jasného postupu na vyšší roli."
+
+        if has_management and progressions == 0 and inferred_score <= 20.0:
+            progression_text += " Role zahrnovala management."
+
+        reasoning = progression_text
 
         # Contractor exception check
         is_contractor_profile = any(exp.is_contractor for exp in resume.experiences)
 
         if is_contractor_profile:
-            reasoning += " | Contractor profile — no hopping penalty applied"
+            reasoning += (
+                " Contractor profil — penalizace za časté střídání zaměstnání se neuplatňuje."
+            )
         else:
             # Job-hopping penalty: 5+ roles in the last 3 years
             if len(resume.experiences) >= 1:
@@ -273,10 +400,10 @@ class ProgressionComponent:
                 recent = [e for e in resume.experiences if e.start_year >= max_year - 3]
                 if len(recent) >= 5:
                     score = max(0.0, score - 20.0)
-                    reasoning += f" | Penalty: {len(recent)} roles in 3 years (job-hopping)"
+                    reasoning += f" (Penalizace: {len(recent)} rolí za 3 roky — časté střídání.)"
 
         return ScoreComponent(
-            name="ProgressionComponent",
+            name=_LABEL_PROGRESSION,
             score=score,
             weight=_WEIGHT_PROGRESSION,
             reasoning=reasoning,
@@ -290,10 +417,10 @@ class EducationComponent:
     def compute(resume: Resume) -> ScoreComponent:
         if not resume.educations:
             return ScoreComponent(
-                name="EducationComponent",
+                name=_LABEL_EDUCATION,
                 score=0.0,
                 weight=_WEIGHT_EDUCATION,
-                reasoning="No education entries found",
+                reasoning="V CV není uvedeno vzdělání.",
             )
 
         # Take the highest degree
@@ -302,6 +429,12 @@ class EducationComponent:
             key=lambda e: _DEGREE_SCORES.get(e.degree, 0),
         )
         base_score = float(_DEGREE_SCORES.get(best_edu.degree, 0))
+
+        # Ensure vocational/other degrees have a meaningful floor —
+        # for blue-collar and trades roles a degree is genuinely not required,
+        # so the component should not drag the total down unfairly.
+        if best_edu.degree in ("other", "none"):
+            base_score = max(base_score, 20.0)
 
         # Determine primary occupation_family from the candidate's current role.
         # Ongoing roles (end_year=None) outrank finished ones, then we prefer
@@ -326,12 +459,13 @@ class EducationComponent:
         bonus = 10.0 if is_relevant else 0.0
         final_score = min(100.0, base_score + bonus)
 
-        reasoning = f"Highest degree: {best_edu.degree} → {base_score:.0f}" + (
-            f" | +10 relevant field ({best_edu.field})" if is_relevant else ""
-        )
+        degree_label = _DEGREE_CZ.get(best_edu.degree, best_edu.degree)
+        reasoning = f"Nejvyšší vzdělání: {degree_label}."
+        if is_relevant and best_edu.field:
+            reasoning += f" Obor ({best_edu.field}) odpovídá zaměření kariéry — bonus za relevanci."
 
         return ScoreComponent(
-            name="EducationComponent",
+            name=_LABEL_EDUCATION,
             score=final_score,
             weight=_WEIGHT_EDUCATION,
             reasoning=reasoning,
@@ -339,31 +473,51 @@ class EducationComponent:
 
 
 class DomainExpertiseComponent:
-    """Score based on domain focus (fewer domains = higher focus = higher score). Weight: 0.10."""
+    """Score based on domain focus. Weight: 0.10.
+
+    Redesign rationale vs. v1:
+    - Old: "fewer domains = higher score" with steep 15-point drop per domain.
+           This unfairly penalised valuable cross-domain profiles (health-tech, fintech).
+    - New: 1 domain = strong focus (100); 2 domains = moderate cross-domain (75, not 70);
+           Each additional domain beyond 2 has a smaller 10-point drop.
+           The reasoning no longer implies cross-domain is negative.
+
+    TODO(review): The per-domain penalty (10 pts beyond 2 domains) and the
+    cross-domain floor were set heuristically. Calibrate against labeled data.
+    """
 
     @staticmethod
     def compute(resume: Resume) -> ScoreComponent:
         if not resume.experiences:
             return ScoreComponent(
-                name="DomainExpertiseComponent",
+                name=_LABEL_DOMAIN,
                 score=50.0,  # Neutral if no experience
                 weight=_WEIGHT_DOMAIN,
-                reasoning="No experience entries — neutral score",
+                reasoning="Žádné pracovní zkušenosti — hodnocení oboru nelze provést.",
             )
 
         # Use occupation_family (ISCO-based) as domain diversity measure
         families = {exp.occupation_family for exp in resume.experiences if exp.occupation_family}
         num_domains = max(1, len(families))
 
-        score = max(0.0, 100.0 - (num_domains - 1) * 15.0)
+        if num_domains == 1:
+            score = 100.0
+        elif num_domains == 2:
+            # Cross-domain is often a premium — don't penalise heavily
+            score = 75.0
+        else:
+            # Beyond 2 domains: modest additional penalty
+            score = max(0.0, 75.0 - (num_domains - 2) * 10.0)
 
-        reasoning = (
-            f"{num_domains} distinct occupation families → focus score {score:.0f} "
-            f"(fewer domains = higher score)"
-        )
+        if num_domains == 1:
+            reasoning = "Soustředěné zaměření na jeden obor."
+        elif num_domains == 2:
+            reasoning = "Zkušenost ve dvou oborech — mezioborový profil může být výhodou."
+        else:
+            reasoning = f"Zkušenost napříč {num_domains} obory — velmi různorodý profil."
 
         return ScoreComponent(
-            name="DomainExpertiseComponent",
+            name=_LABEL_DOMAIN,
             score=score,
             weight=_WEIGHT_DOMAIN,
             reasoning=reasoning,

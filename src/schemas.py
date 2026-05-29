@@ -14,8 +14,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class Education(BaseModel):
     """Academic education entry from CV."""
 
-    degree: Literal["bachelor", "master", "phd", "other", "none"] = Field(
-        description="Highest degree level achieved"
+    degree: Literal["bachelor", "master", "phd", "high_school", "other", "none"] = Field(
+        description=(
+            "Highest degree level achieved. Use 'high_school' for Czech secondary education "
+            "WITH maturita (gymnázium, SPŠ, SOŠ, obchodní akademie) and for VOŠ (DiS.); "
+            "use 'other' only for vocational training without maturita (výuční list / SOU) "
+            "or unclear cases; 'none' if no education is stated."
+        )
     )
     field: str | None = Field(default=None, description="Field of study (e.g. Computer Science)")
     institution: str | None = Field(default=None, description="University or school name")
