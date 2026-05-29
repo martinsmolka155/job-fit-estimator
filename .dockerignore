@@ -1,0 +1,42 @@
+# Secrets & local env — must never be baked into an image
+.env
+.env.*
+!.env.example
+
+# VCS / tooling / caches
+.git
+.gitignore
+.github
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+.python-version
+
+# Editor / OS / agent metadata
+.DS_Store
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Local data / runtime artifacts (downloaded or generated at runtime)
+data/.cost_log.jsonl
+data/ispv_2025.xlsx
+
+# Tests, docs, screenshots, internal dev artifacts — not needed in the runtime image
+tests/
+docs/
+.screenshots/
+tasks/
+decisions/
+state/
+BLOCKERS.md
+POSTMORTEM.md
+dist/
+*.egg-info/

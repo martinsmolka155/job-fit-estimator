@@ -1,0 +1,1918 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ohodnoť svoje CV — Job Fit &amp; Salary Estimator</title>
+  <meta name="description" content="Nahraj CV a zjisti své seniority skóre, odhad mzdy v CZK a 3 konkrétní kroky, jak ji posunout." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Hanken+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #fbfaf8;
+      --surface:     #ffffff;
+      --ink:         #1a1613;
+      --ink-2:       #3a332d;
+      --muted:       #6b645c;
+      --hairline:    #e7e0d6;
+      --hairline-2:  #f0ebe3;
+      --emerald:     #0e7c66;
+      --emerald-dim: #0a6353;
+      --emerald-bg:  #e8f5f1;
+      --warn-bg:     #fffbeb;
+      --warn-border: #f0d060;
+      --warn-text:   #7a5c00;
+      --error-bg:    #fef2f2;
+      --error-border:#f5c6c6;
+      --error-text:  #9b1c1c;
+      --radius-sm:   8px;
+      --radius:      12px;
+      --radius-lg:   20px;
+      --shadow-sm:   0 1px 3px rgba(26,22,19,.06), 0 1px 2px rgba(26,22,19,.04);
+      --shadow:      0 4px 16px rgba(26,22,19,.08), 0 1px 4px rgba(26,22,19,.04);
+      --shadow-lg:   0 8px 32px rgba(26,22,19,.1),  0 2px 8px rgba(26,22,19,.06);
+      --font-display:'Fraunces', Georgia, serif;
+      --font-body:   'Hanken Grotesk', system-ui, sans-serif;
+      --transition:  0.18s ease;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Focus Visible ────────────────────────────────────────────────── */
+    :focus { outline: none; }
+    :focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: 4px;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    .page-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 20px 80px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 760px;
+    }
+
+    /* ── Typography ───────────────────────────────────────────────────── */
+    h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 600; line-height: 1.2; }
+
+    .display {
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+
+    .display em {
+      font-style: italic;
+      color: var(--emerald);
+    }
+
+    .subline {
+      font-family: var(--font-body);
+      font-size: 1.05rem;
+      color: var(--muted);
+      font-weight: 400;
+      line-height: 1.65;
+    }
+
+    .label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    /* ── Nav / Header ─────────────────────────────────────────────────── */
+    .site-header {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 28px 20px;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .wordmark {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+    }
+    .wordmark span { color: var(--emerald); }
+
+    /* ── Hero Section ─────────────────────────────────────────────────── */
+    #view-upload {
+      width: 100%;
+      max-width: 760px;
+      padding-top: 56px;
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--emerald-bg);
+      border-radius: 100px;
+      color: var(--emerald-dim);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+
+    .hero-eyebrow::before {
+      content: '';
+      width: 6px; height: 6px;
+      background: var(--emerald);
+      border-radius: 50%;
+    }
+
+    .hero-headline { margin-bottom: 20px; }
+
+    .hero-subline {
+      max-width: 560px;
+      margin-bottom: 52px;
+    }
+
+    /* ── Upload Card ──────────────────────────────────────────────────── */
+    .upload-card {
+      background: var(--surface);
+      border: 1.5px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+      box-shadow: var(--shadow);
+    }
+
+    .dropzone {
+      border: 1.5px dashed var(--hairline);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color var(--transition), background var(--transition);
+      position: relative;
+    }
+
+    .dropzone:hover,
+    .dropzone.drag-over {
+      border-color: var(--emerald);
+      background: var(--emerald-bg);
+    }
+
+    .dropzone:focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: var(--radius);
+    }
+
+    .dropzone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+      /* Not the keyboard affordance — parent div[role=button] handles that */
+    }
+
+    .dropzone-icon {
+      width: 44px; height: 44px;
+      margin: 0 auto 16px;
+      color: var(--muted);
+      display: block;
+    }
+
+    .dropzone-icon svg { width: 100%; height: 100%; }
+
+    .dropzone-primary {
+      font-weight: 500;
+      color: var(--ink-2);
+      margin-bottom: 4px;
+    }
+
+    .dropzone-secondary {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .file-chosen {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-top: 16px;
+      padding: 10px 14px;
+      background: var(--emerald-bg);
+      border-radius: var(--radius-sm);
+      color: var(--emerald-dim);
+      font-size: 0.88rem;
+      font-weight: 500;
+    }
+
+    .file-chosen.visible { display: flex; }
+
+    .file-chosen-icon {
+      flex-shrink: 0;
+      width: 16px; height: 16px;
+    }
+
+    .file-chosen-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .file-clear {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      padding: 2px;
+      line-height: 1;
+      transition: color var(--transition);
+    }
+    .file-clear:hover { color: var(--ink); }
+    .file-clear:focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: 3px;
+    }
+
+    /* Inline privacy note — inside upload card, legible contrast */
+    .upload-privacy {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 16px;
+      padding: 10px 14px;
+      background: var(--hairline-2);
+      border-radius: var(--radius-sm);
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .upload-privacy svg {
+      flex-shrink: 0;
+      margin-top: 1px;
+      color: var(--muted);
+    }
+
+    .inline-error {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: var(--error-bg);
+      border-radius: var(--radius-sm);
+      color: var(--error-text);
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: 1px solid var(--error-border);
+    }
+    .inline-error.visible { display: flex; }
+
+    .submit-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      margin-top: 24px;
+      padding: 15px 28px;
+      background: var(--emerald);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font-body);
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
+      box-shadow: 0 2px 8px rgba(14,124,102,.25);
+    }
+
+    .submit-btn:hover:not(:disabled) {
+      background: var(--emerald-dim);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(14,124,102,.3);
+    }
+
+    .submit-btn:active:not(:disabled) { transform: translateY(0); }
+
+    .submit-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .submit-btn:focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: var(--radius);
+    }
+
+    .upload-note {
+      text-align: center;
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    /* ── Loading State ────────────────────────────────────────────────── */
+    #view-loading {
+      display: none;
+      width: 100%;
+      max-width: 760px;
+      padding-top: 80px;
+    }
+
+    .loading-center {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 32px;
+    }
+
+    .progress-ring {
+      position: relative;
+      width: 80px;
+      height: 80px;
+    }
+
+    .progress-ring svg {
+      transform: rotate(-90deg);
+    }
+
+    .progress-ring-track {
+      fill: none;
+      stroke: var(--hairline);
+      stroke-width: 4;
+    }
+
+    .progress-ring-fill {
+      fill: none;
+      stroke: var(--emerald);
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-dasharray: 220;
+      stroke-dashoffset: 220;
+      transition: stroke-dashoffset 0.8s ease;
+    }
+
+    .loading-step-text {
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--ink-2);
+      min-height: 1.5em;
+      transition: opacity 0.3s ease;
+    }
+
+    /* Cancel link in loading view */
+    .loading-cancel {
+      font-size: 0.85rem;
+      color: var(--muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-body);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      padding: 0;
+      transition: color var(--transition);
+    }
+    .loading-cancel:hover { color: var(--ink); }
+    .loading-cancel:focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: 3px;
+    }
+
+    .skeleton-cards {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 8px;
+    }
+
+    .skeleton-card {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 24px;
+      overflow: hidden;
+    }
+
+    .skeleton-line {
+      height: 12px;
+      background: linear-gradient(90deg, var(--hairline-2) 25%, #ede8e0 50%, var(--hairline-2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 100px;
+    }
+
+    .skeleton-line + .skeleton-line { margin-top: 10px; }
+    .skeleton-line.w-40 { width: 40%; }
+    .skeleton-line.w-60 { width: 60%; }
+    .skeleton-line.w-80 { width: 80%; }
+    .skeleton-line.w-full { width: 100%; }
+
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+
+    /* ── Results ──────────────────────────────────────────────────────── */
+    #view-results {
+      display: none;
+      width: 100%;
+      max-width: 760px;
+      padding-top: 48px;
+    }
+
+    .results-header {
+      margin-bottom: 40px;
+    }
+
+    .results-headline {
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      margin-bottom: 8px;
+    }
+
+    .section-divider {
+      height: 1px;
+      background: var(--hairline);
+      margin: 40px 0;
+    }
+
+    /* Score Section */
+    .score-section {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      padding: 36px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .score-layout {
+      display: flex;
+      align-items: center;
+      gap: 40px;
+    }
+
+    .score-gauge-wrap {
+      flex-shrink: 0;
+      position: relative;
+      width: 120px;
+      height: 120px;
+    }
+
+    .score-gauge-wrap svg {
+      transform: rotate(-90deg);
+    }
+
+    .score-gauge-track {
+      fill: none;
+      stroke: var(--hairline);
+      stroke-width: 8;
+    }
+
+    .score-gauge-fill {
+      fill: none;
+      stroke: var(--emerald);
+      stroke-width: 8;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1);
+    }
+
+    .score-center-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .score-number {
+      font-family: var(--font-display);
+      font-size: 2rem;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--ink);
+    }
+
+    .score-denom {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .score-meta {
+      flex: 1;
+    }
+
+    .score-title {
+      font-family: var(--font-display);
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .score-confidence {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--emerald-bg);
+      border-radius: 100px;
+      color: var(--emerald-dim);
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .score-confidence::before {
+      content: '';
+      width: 6px; height: 6px;
+      background: var(--emerald);
+      border-radius: 50%;
+    }
+
+    .score-components-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 16px;
+      background: none;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-sm);
+      padding: 6px 12px;
+      font-family: var(--font-body);
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      transition: border-color var(--transition), color var(--transition);
+    }
+    .score-components-toggle:hover { border-color: var(--emerald); color: var(--emerald); }
+    .score-components-toggle:focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: var(--radius-sm);
+    }
+    .score-components-toggle svg { transition: transform var(--transition); }
+    .score-components-toggle.open svg { transform: rotate(180deg); }
+
+    .score-components {
+      display: none;
+      margin-top: 20px;
+      border-top: 1px solid var(--hairline);
+      padding-top: 20px;
+    }
+    .score-components.open { display: block; }
+
+    .component-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: start;
+      gap: 8px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--hairline-2);
+    }
+    .component-row:last-child { border-bottom: none; }
+
+    .component-name {
+      font-weight: 500;
+      font-size: 0.9rem;
+      color: var(--ink-2);
+    }
+
+    .component-score {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--emerald);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .component-detail {
+      grid-column: 1 / -1;
+      font-size: 0.82rem;
+      color: var(--muted);
+      padding-top: 2px;
+    }
+
+    .component-bar-wrap {
+      grid-column: 1 / -1;
+      height: 3px;
+      background: var(--hairline);
+      border-radius: 100px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+
+    .component-bar-fill {
+      height: 100%;
+      background: var(--emerald);
+      border-radius: 100px;
+      transition: width 0.8s cubic-bezier(.4,0,.2,1);
+    }
+
+    /* Salary Section */
+    .salary-section {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      padding: 36px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .section-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    .salary-range {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .salary-mid {
+      font-family: var(--font-display);
+      font-size: clamp(1.8rem, 4vw, 2.4rem);
+      font-weight: 700;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+
+    .salary-range-label {
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .salary-band {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .salary-low, .salary-high {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--ink-2);
+    }
+
+    .salary-dash { color: var(--muted); }
+
+    .salary-assumptions {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .salary-assumption {
+      font-size: 0.79rem;
+      color: var(--muted);
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .salary-assumption::before {
+      content: '—';
+      flex-shrink: 0;
+    }
+
+    /* Warnings block — amber, above salary or near it */
+    .warnings-block {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      padding: 14px 18px;
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      border-radius: var(--radius-sm);
+      margin-bottom: 24px;
+    }
+
+    .warnings-block-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--warn-text);
+      margin-bottom: 6px;
+    }
+
+    .warnings-block-header svg {
+      flex-shrink: 0;
+      color: #b45309;
+    }
+
+    .warnings-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-left: 24px;
+    }
+
+    .warnings-list li {
+      font-size: 0.875rem;
+      line-height: 1.6;
+      color: var(--warn-text);
+      position: relative;
+    }
+
+    .warnings-list li::before {
+      content: '·';
+      position: absolute;
+      left: -14px;
+      font-weight: 700;
+    }
+
+    /* Summary */
+    .summary-section p {
+      font-size: 1rem;
+      line-height: 1.75;
+      color: var(--ink-2);
+    }
+
+    /* Strengths / Gaps */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 580px) {
+      .two-col { grid-template-columns: 1fr; }
+      .score-layout { flex-direction: column; gap: 24px; }
+    }
+
+    .strength-card, .gap-card {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .strength-card h3, .gap-card h3 {
+      font-size: 0.9rem;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot-green {
+      width: 8px; height: 8px;
+      background: var(--emerald);
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .dot-amber {
+      width: 8px; height: 8px;
+      background: #d97706;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .item-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .item-list li {
+      font-size: 0.88rem;
+      color: var(--ink-2);
+      padding-left: 16px;
+      position: relative;
+      line-height: 1.5;
+    }
+
+    .item-list li::before {
+      content: '→';
+      position: absolute;
+      left: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    /* Recommendations */
+    .recs-header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+
+    .recs-title {
+      font-size: 1.15rem;
+    }
+
+    .rec-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .rec-card {
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow-sm);
+      transition: transform var(--transition), box-shadow var(--transition);
+      opacity: 0;
+      transform: translateY(12px);
+    }
+
+    .rec-card.revealed {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.5s ease, transform 0.5s ease, box-shadow 0.18s ease;
+    }
+
+    .rec-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
+    .rec-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .rec-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--ink);
+      flex: 1;
+    }
+
+    .rec-badges {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    /* Tier badges */
+    .badge-tier-medium {
+      background: #fef9c3;
+      color: #854d0e;
+      border: 1px solid #fde047;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .badge-tier-high {
+      background: #dcfce7;
+      color: #166534;
+      border: 1px solid #86efac;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .badge-tier-transformative {
+      background: var(--emerald);
+      color: #fff;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .badge-range {
+      background: var(--hairline-2);
+      color: var(--ink-2);
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    .badge-time {
+      background: var(--hairline-2);
+      color: var(--muted);
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    .rec-why {
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+
+    .rec-action {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 12px 14px;
+      background: var(--emerald-bg);
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      color: var(--emerald-dim);
+    }
+
+    .rec-action-label {
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    /* Error State */
+    #view-error {
+      display: none;
+      width: 100%;
+      max-width: 760px;
+      padding-top: 80px;
+    }
+
+    .error-card {
+      background: var(--surface);
+      border: 1px solid var(--error-border);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .error-icon-wrap {
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: center;
+      color: #b91c1c;
+    }
+
+    .error-title {
+      font-size: 1.3rem;
+      margin-bottom: 10px;
+    }
+
+    .error-message {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+    }
+
+    .error-status {
+      color: var(--hairline);
+      font-size: 0.78rem;
+      margin-bottom: 28px;
+      font-variant-numeric: tabular-nums;
+      color: #c4b9ae;
+    }
+
+    /* Reset button */
+    .reset-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 22px;
+      background: none;
+      border: 1.5px solid var(--hairline);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-body);
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--ink-2);
+      cursor: pointer;
+      transition: border-color var(--transition), color var(--transition);
+    }
+    .reset-btn:hover { border-color: var(--emerald); color: var(--emerald); }
+    .reset-btn:focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: var(--radius-sm);
+    }
+
+    /* Footer */
+    .site-footer {
+      border-top: 1px solid var(--hairline);
+      padding: 28px 20px;
+      text-align: center;
+    }
+
+    .footer-inner {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .footer-disclaimer {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .footer-privacy {
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    /* Stagger reveal helper */
+    .stagger-reveal {
+      opacity: 0;
+      transform: translateY(16px);
+      transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+    .stagger-reveal.revealed {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Thin-space number formatting via CSS */
+    .num-sep { letter-spacing: -0.02em; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="site-header">
+      <div class="wordmark">Job Fit<span>.</span></div>
+    </div>
+  </header>
+
+  <main class="page-wrap">
+
+    <!-- ── View: Upload ──────────────────────────────────────────────────── -->
+    <section id="view-upload" class="container">
+      <div class="hero-eyebrow">Orientační analýza · ISPV data</div>
+
+      <h1 class="display hero-headline">
+        Zjisti, kolik si<br>reálně <em>řekneš.</em>
+      </h1>
+
+      <p class="subline hero-subline">
+        Nahraj CV — dostaneš skóre seniority, odhad měsíční hrubé mzdy v&nbsp;CZK a&nbsp;3&nbsp;konkrétní kroky, jak ji posunout&nbsp;výš.
+      </p>
+
+      <div class="upload-card">
+        <div
+          class="dropzone"
+          id="dropzone"
+          role="button"
+          tabindex="0"
+          aria-label="Nahrát CV — přetáhni soubor nebo stiskni Enter pro výběr"
+        >
+          <input
+            type="file"
+            id="cv-input"
+            accept=".pdf,.docx"
+            tabindex="-1"
+            aria-hidden="true"
+          />
+          <span class="dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect width="44" height="44" rx="10" fill="currentColor" fill-opacity=".06"/>
+              <path d="M22 27V17M22 17L18 21M22 17L26 21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M14 30h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <p class="dropzone-primary" id="dropzone-primary-text">Přetáhni sem CV nebo klikni pro výběr</p>
+          <p class="dropzone-secondary">Podporované formáty: .pdf, .docx · Max 10 MB</p>
+        </div>
+
+        <div class="file-chosen" id="file-chosen">
+          <svg class="file-chosen-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M4 2h6l4 4v8a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M10 2v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+          <span class="file-chosen-name" id="file-chosen-name"></span>
+          <button class="file-clear" id="file-clear" aria-label="Odebrat soubor" type="button">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <div
+          class="inline-error"
+          id="inline-error"
+          role="alert"
+          aria-live="assertive"
+          aria-atomic="true"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M7 4v3.5M7 9.5v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span id="inline-error-text"></span>
+        </div>
+
+        <!-- Inline privacy note — legible, above submit -->
+        <div class="upload-privacy" role="note">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M7 1L2 3.5v4c0 2.8 2.1 5.4 5 6 2.9-.6 5-3.2 5-6v-4L7 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+          </svg>
+          <span>CV se nikam neukládá — zpracuje se v&nbsp;paměti a&nbsp;zahodí. Text jde do&nbsp;OpenAI; netrénuje se na&nbsp;něm.</span>
+        </div>
+
+        <button class="submit-btn" id="submit-btn" type="button" disabled>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 8h12M9 4l5 4-5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Analyzovat CV
+        </button>
+        <p class="upload-note">Analýza trvá přibližně 30–60 sekund</p>
+      </div>
+    </section>
+
+    <!-- ── View: Loading ─────────────────────────────────────────────────── -->
+    <section id="view-loading" class="container">
+      <div class="loading-center">
+        <div class="progress-ring" aria-hidden="true">
+          <svg width="80" height="80" viewBox="0 0 80 80">
+            <circle class="progress-ring-track" cx="40" cy="40" r="34" />
+            <circle class="progress-ring-fill" id="progress-fill" cx="40" cy="40" r="34" />
+          </svg>
+        </div>
+        <p class="loading-step-text" id="loading-step" aria-live="polite">Nahrávám CV…</p>
+        <button class="loading-cancel" id="loading-cancel" type="button">Zrušit</button>
+        <div class="skeleton-cards" aria-hidden="true">
+          <div class="skeleton-card">
+            <div class="skeleton-line w-40"></div>
+            <div class="skeleton-line w-full" style="margin-top:14px;height:40px;border-radius:8px;"></div>
+            <div class="skeleton-line w-60" style="margin-top:10px;"></div>
+          </div>
+          <div class="skeleton-card">
+            <div class="skeleton-line w-40"></div>
+            <div class="skeleton-line w-80" style="margin-top:14px;"></div>
+            <div class="skeleton-line w-60"></div>
+            <div class="skeleton-line w-80"></div>
+          </div>
+          <div class="skeleton-card">
+            <div class="skeleton-line w-40"></div>
+            <div class="skeleton-line w-full" style="margin-top:14px;"></div>
+            <div class="skeleton-line w-full"></div>
+            <div class="skeleton-line w-60"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── View: Results ──────────────────────────────────────────────────── -->
+    <section id="view-results" class="container">
+
+      <div class="results-header stagger-reveal">
+        <h2 class="display results-headline">Výsledky analýzy</h2>
+        <p class="subline" id="results-subline" style="margin-bottom:0;"></p>
+      </div>
+
+      <!-- Score -->
+      <div class="score-section stagger-reveal" style="transition-delay:.05s;">
+        <div class="label">Seniority skóre</div>
+        <div class="score-layout" style="margin-top:20px;">
+          <div class="score-gauge-wrap">
+            <!--
+              The SVG gauge is decorative here; the score value + level
+              are already present as visible text in score-number / score-level-label.
+              Screen readers will read those text nodes.
+            -->
+            <svg
+              width="120" height="120" viewBox="0 0 120 120"
+              aria-hidden="true"
+              id="score-gauge-svg"
+            >
+              <circle class="score-gauge-track" cx="60" cy="60" r="50"/>
+              <circle class="score-gauge-fill" id="score-gauge-fill" cx="60" cy="60" r="50"
+                style="stroke-dasharray:314; stroke-dashoffset:314;"/>
+            </svg>
+            <div class="score-center-label" aria-hidden="true">
+              <span class="score-number" id="score-number">—</span>
+              <span class="score-denom">/100</span>
+            </div>
+          </div>
+          <div class="score-meta">
+            <!-- Accessible label for the gauge is provided via visually-adjacent text -->
+            <div class="score-title" id="score-level-label">—</div>
+            <div class="score-confidence" id="score-confidence">spolehlivost —</div>
+            <button
+              class="score-components-toggle"
+              id="components-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="score-components"
+            >
+              Detail skóre
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <!-- Visually hidden accessible description of gauge, updated by JS -->
+        <span id="score-gauge-desc" class="sr-only" aria-live="polite"></span>
+        <div class="score-components" id="score-components"></div>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- Warnings — above salary so a shaky number is flagged before it's read -->
+      <div id="warnings-block" style="display:none;" role="status" aria-live="polite"></div>
+
+      <!-- Salary -->
+      <div class="salary-section stagger-reveal" style="transition-delay:.1s;">
+        <div class="section-label">Odhad mzdy · měsíční hrubá</div>
+        <div class="salary-range">
+          <span class="salary-mid" id="salary-mid">—</span>
+          <span class="salary-range-label">střed pásma</span>
+        </div>
+        <div class="salary-band">
+          <span class="salary-low" id="salary-low">—</span>
+          <span class="salary-dash">–</span>
+          <span class="salary-high" id="salary-high">—</span>
+          <span class="salary-range-label" id="salary-currency"></span>
+        </div>
+        <div class="salary-assumptions" id="salary-assumptions"></div>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- Summary -->
+      <div class="summary-section stagger-reveal" style="transition-delay:.15s;">
+        <div class="section-label" style="margin-bottom:16px;">Shrnutí</div>
+        <p id="summary-text"></p>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- Strengths & Gaps -->
+      <div class="two-col stagger-reveal" style="transition-delay:.2s;">
+        <div class="strength-card">
+          <h3>
+            <span class="dot-green" aria-hidden="true"></span>
+            Silné stránky
+          </h3>
+          <ul class="item-list" id="strengths-list"></ul>
+        </div>
+        <div class="gap-card">
+          <h3>
+            <span class="dot-amber" aria-hidden="true"></span>
+            Co ti chybí
+          </h3>
+          <ul class="item-list" id="gaps-list"></ul>
+        </div>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- Recommendations -->
+      <div class="stagger-reveal" style="transition-delay:.25s;">
+        <div class="recs-header">
+          <h3 class="recs-title">Doporučené kroky</h3>
+        </div>
+        <div class="rec-cards" id="rec-cards"></div>
+      </div>
+
+      <!-- Reset -->
+      <div style="margin-top:48px; text-align:center;">
+        <button class="reset-btn" id="reset-btn" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M2 7a5 5 0 1 0 1.5-3.5L2 5V2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Zkusit jiné CV
+        </button>
+      </div>
+    </section>
+
+    <!-- ── View: Error ────────────────────────────────────────────────────── -->
+    <section id="view-error" class="container">
+      <div class="error-card">
+        <div class="error-icon-wrap" aria-hidden="true">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <circle cx="20" cy="20" r="18" stroke="currentColor" stroke-width="2"/>
+            <path d="M20 12v10M20 28v1" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h2 class="error-title">Teď se nedaří připojit k AI</h2>
+        <p class="error-message" id="error-message">Zkus to prosím za chvíli.</p>
+        <p class="error-status" id="error-status"></p>
+        <button class="reset-btn" id="reset-btn-error" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M2 7a5 5 0 1 0 1.5-3.5L2 5V2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Zkusit znovu
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p class="footer-disclaimer">
+        Orientační odhad, ne záruka — vychází z&nbsp;veřejných dat ISPV a&nbsp;analýzy CV.
+      </p>
+      <p class="footer-privacy">
+        CV se nikam neukládá · Text jde do OpenAI; netrénuje se na&nbsp;něm.
+      </p>
+    </div>
+  </footer>
+
+  <!-- Screen-reader only utility -->
+  <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}</style>
+
+  <script>
+    "use strict";
+
+    /* ── Helpers ──────────────────────────────────────────────────────────── */
+
+    /** Format integer with thin-space thousands separator */
+    function fmtNum(n) {
+      return Math.round(n).toLocaleString("cs-CZ");
+    }
+
+    /** Escape HTML to prevent XSS when injecting dynamic strings */
+    function esc(str) {
+      const d = document.createElement("div");
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    /** Show only one view section at a time */
+    function showView(id) {
+      ["view-upload", "view-loading", "view-results", "view-error"].forEach(v => {
+        const el = document.getElementById(v);
+        if (!el) return;
+        el.style.display = v === id ? "block" : "none";
+      });
+    }
+
+    /* ── Mobile: touch-friendly dropzone copy ────────────────────────────── */
+    if (window.matchMedia("(hover: none)").matches) {
+      const primaryText = document.getElementById("dropzone-primary-text");
+      if (primaryText) primaryText.textContent = "Klepni pro výběr souboru";
+    }
+
+    /* ── State ────────────────────────────────────────────────────────────── */
+
+    let selectedFile = null;
+    let abortController = null;
+
+    /* ── DOM refs ─────────────────────────────────────────────────────────── */
+
+    const dropzone       = document.getElementById("dropzone");
+    const cvInput        = document.getElementById("cv-input");
+    const fileChosen     = document.getElementById("file-chosen");
+    const fileChosenName = document.getElementById("file-chosen-name");
+    const fileClear      = document.getElementById("file-clear");
+    const inlineError    = document.getElementById("inline-error");
+    const inlineErrorText = document.getElementById("inline-error-text");
+    const submitBtn      = document.getElementById("submit-btn");
+    const resetBtn       = document.getElementById("reset-btn");
+    const resetBtnError  = document.getElementById("reset-btn-error");
+    const loadingCancel  = document.getElementById("loading-cancel");
+
+    /* ── File selection ───────────────────────────────────────────────────── */
+
+    function setFile(file) {
+      if (!file) {
+        selectedFile = null;
+        fileChosen.classList.remove("visible");
+        fileChosenName.textContent = "";
+        submitBtn.disabled = true;
+        return;
+      }
+
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!["pdf","docx"].includes(ext)) {
+        showInlineError("Nepodporovaný formát. Nahraj .pdf nebo .docx.");
+        setFile(null);
+        return;
+      }
+
+      if (file.size > 10 * 1024 * 1024) {
+        showInlineError("Soubor je příliš velký. Maximum je 10 MB.");
+        setFile(null);
+        return;
+      }
+
+      clearInlineError();
+      selectedFile = file;
+      fileChosenName.textContent = file.name;
+      fileChosen.classList.add("visible");
+      submitBtn.disabled = false;
+    }
+
+    function showInlineError(msg) {
+      inlineErrorText.textContent = msg;
+      inlineError.classList.add("visible");
+    }
+
+    function clearInlineError() {
+      inlineError.classList.remove("visible");
+    }
+
+    cvInput.addEventListener("change", () => setFile(cvInput.files[0] || null));
+    fileClear.addEventListener("click", () => {
+      cvInput.value = "";
+      setFile(null);
+      clearInlineError();
+    });
+
+    // Drag and drop
+    dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag-over"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+    dropzone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropzone.classList.remove("drag-over");
+      const file = e.dataTransfer?.files?.[0];
+      if (file) setFile(file);
+    });
+
+    // Click on dropzone div — open file picker
+    dropzone.addEventListener("click", e => {
+      // Don't double-trigger if the click was on the input itself
+      if (e.target !== cvInput) cvInput.click();
+    });
+
+    // Keyboard trigger
+    dropzone.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cvInput.click(); }
+    });
+
+    /* ── Loading animation ─────────────────────────────────────────────────── */
+
+    const LOADING_STEPS = [
+      { text: "Nahrávám CV…",          progress: 0.12 },
+      { text: "Čtu obsah dokumentu…",  progress: 0.28 },
+      { text: "Identifikuji profil…",  progress: 0.45 },
+      { text: "Počítám seniority…",    progress: 0.62 },
+      { text: "Odhaduji mzdu…",        progress: 0.78 },
+      { text: "Sestavuji doporučení…", progress: 0.90 },
+    ];
+
+    let loadingTimer = null;
+    let loadingStepIdx = 0;
+
+    const progressFill = document.getElementById("progress-fill");
+    const loadingStepEl = document.getElementById("loading-step");
+    const CIRC = 2 * Math.PI * 34; // r=34 on 80px svg
+
+    function setProgress(fraction) {
+      const offset = CIRC * (1 - Math.min(fraction, 0.98));
+      progressFill.style.strokeDashoffset = offset;
+    }
+
+    function startLoading() {
+      loadingStepIdx = 0;
+      setProgress(0);
+      advanceLoadingStep();
+    }
+
+    function advanceLoadingStep() {
+      if (loadingStepIdx >= LOADING_STEPS.length) return;
+      const step = LOADING_STEPS[loadingStepIdx];
+      loadingStepEl.textContent = step.text;
+      setProgress(step.progress);
+      loadingStepIdx++;
+      const delay = loadingStepIdx === 1 ? 400 : 3500 + Math.random() * 2000;
+      loadingTimer = setTimeout(advanceLoadingStep, delay);
+    }
+
+    function stopLoading() {
+      if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
+      setProgress(1);
+    }
+
+    /* ── Cancel loading ────────────────────────────────────────────────────── */
+    loadingCancel.addEventListener("click", () => {
+      if (abortController) { abortController.abort(); abortController = null; }
+      stopLoading();
+      showView("view-upload");
+    });
+
+    /* ── Error mapping ──────────────────────────────────────────────────────── */
+
+    function mapHttpError(status, detail) {
+      const d = detail || "";
+      switch (status) {
+        case 413: return "CV je příliš velké. Maximum je 10 MB.";
+        case 415: return "Nepodporovaný formát souboru. Nahraj .pdf nebo .docx.";
+        case 422:
+          if (d.toLowerCase().includes("czech") || d.toLowerCase().includes("cz") || d.toLowerCase().includes("location"))
+            return "CV neobsahuje českou lokaci — estimátor pracuje pouze s ČR trhem.";
+          if (d.toLowerCase().includes("isco"))
+            return "Nepodařilo se určit pracovní pozici (kód ISCO). Zkus CV doplnit o pracovní titul.";
+          return "CV se nepodařilo zpracovat: " + (d || "neznámá chyba.");
+        case 429: return "Příliš mnoho požadavků nebo byl vyčerpán denní limit. Zkus to za chvíli.";
+        case 502: return "Chyba při komunikaci s AI poskytovatelem. Zkus to za pár minut.";
+        case 503: return "Služba ještě není připravena — chybí data ISPV. Kontaktuj provozovatele.";
+        default:  return "Nastala neočekávaná chyba. Zkus to prosím znovu.";
+      }
+    }
+
+    function showError(msg, status) {
+      stopLoading();
+      document.getElementById("error-message").textContent = msg;
+      const statusEl = document.getElementById("error-status");
+      statusEl.textContent = status ? "HTTP " + status : "";
+      showView("view-error");
+    }
+
+    /* ── Submit / Fetch ──────────────────────────────────────────────────────── */
+
+    submitBtn.addEventListener("click", () => doAnalyze(selectedFile));
+
+    async function doAnalyze(file) {
+      if (!file) return;
+
+      if (abortController) abortController.abort();
+      abortController = new AbortController();
+
+      showView("view-loading");
+      startLoading();
+
+      const formData = new FormData();
+      formData.append("cv", file);
+
+      let res;
+      try {
+        res = await fetch("/analyze", {
+          method: "POST",
+          body: formData,
+          signal: abortController.signal,
+        });
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        showError("Nepodařilo se spojit se serverem. Zkontroluj připojení.");
+        return;
+      }
+
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        showError("Server vrátil neplatnou odpověď.");
+        return;
+      }
+
+      stopLoading();
+
+      if (!res.ok) {
+        showError(mapHttpError(res.status, data?.detail), res.status);
+        return;
+      }
+
+      renderResults(data);
+    }
+
+    /* ── Render ───────────────────────────────────────────────────────────── */
+
+    function scoreLevelLabel(score) {
+      if (score >= 85) return "Expert / Lead";
+      if (score >= 70) return "Senior";
+      if (score >= 50) return "Mid-level";
+      if (score >= 30) return "Junior";
+      return "Začátečník";
+    }
+
+    /** Czech genitive for months: 1 měsíce, 2–4 měsíců, 5+ měsíců */
+    function monthsLabel(n) {
+      if (n === 1) return "1 měsíce";
+      if (n <= 4)  return `${n} měsíců`;
+      return `${n} měsíců`;
+    }
+
+    /** Czech label for impact tier */
+    function tierLabel(tier) {
+      switch (tier) {
+        case "transformative": return "zásadní dopad";
+        case "high":           return "vysoký dopad";
+        default:               return "střední dopad";
+      }
+    }
+
+    /** CSS class for tier badge */
+    function tierBadgeClass(tier) {
+      switch (tier) {
+        case "transformative": return "badge-tier-transformative";
+        case "high":           return "badge-tier-high";
+        default:               return "badge-tier-medium";
+      }
+    }
+
+    function renderResults(data) {
+      const score    = data.score || {};
+      const salary   = data.salary || {};
+      const expl     = data.explanation || {};
+      const warnings = data.warnings || [];
+
+      // Score gauge
+      const total = Math.round(score.total || 0);
+      const circ314 = 2 * Math.PI * 50; // r=50 on 120px svg
+      const gaugeEl = document.getElementById("score-gauge-fill");
+      gaugeEl.style.strokeDasharray = circ314;
+      gaugeEl.style.strokeDashoffset = circ314;
+
+      document.getElementById("score-number").textContent = total;
+      const levelTxt = scoreLevelLabel(total);
+      document.getElementById("score-level-label").textContent = levelTxt;
+      const conf = Math.round((score.confidence || 0) * 100);
+      document.getElementById("score-confidence").textContent = `spolehlivost ${conf} %`;
+
+      // Update accessible gauge description
+      document.getElementById("score-gauge-desc").textContent =
+        `Seniority skóre: ${total} ze 100 — ${levelTxt}, spolehlivost ${conf} %`;
+
+      // Animate gauge after paint
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const offset = circ314 * (1 - total / 100);
+        gaugeEl.style.strokeDashoffset = offset;
+      }));
+
+      // Components
+      const comps = score.components || [];
+      const compsEl = document.getElementById("score-components");
+      compsEl.innerHTML = comps.map(c => {
+        const barWidth = Math.min(Math.max(Math.round(c.score), 0), 100);
+        return `<div class="component-row">
+          <span class="component-name">${esc(c.name)}</span>
+          <span class="component-score">${Math.round(c.score)}</span>
+          <span class="component-detail">${esc(c.reasoning)}</span>
+          <div class="component-bar-wrap">
+            <div class="component-bar-fill" style="width:${barWidth}%"></div>
+          </div>
+        </div>`;
+      }).join("");
+
+      // Components toggle
+      const toggle = document.getElementById("components-toggle");
+      const compsContainer = document.getElementById("score-components");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.classList.remove("open");
+      compsContainer.classList.remove("open");
+
+      toggle.onclick = () => {
+        const isOpen = compsContainer.classList.toggle("open");
+        toggle.classList.toggle("open", isOpen);
+        toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      };
+
+      // Salary
+      const curr = salary.currency || "CZK";
+      const currLabel = curr === "CZK" ? "Kč/měsíc" : curr + "/měsíc";
+      document.getElementById("salary-mid").textContent = fmtNum(salary.mid || 0) + " " + (curr === "CZK" ? "Kč" : curr);
+      document.getElementById("salary-low").textContent = fmtNum(salary.low || 0);
+      document.getElementById("salary-high").textContent = fmtNum(salary.high || 0);
+      document.getElementById("salary-currency").textContent = currLabel;
+
+      const assumptionsEl = document.getElementById("salary-assumptions");
+      assumptionsEl.innerHTML = (salary.assumptions || []).map(a =>
+        `<span class="salary-assumption">${esc(a)}</span>`
+      ).join("");
+
+      // Summary
+      document.getElementById("summary-text").textContent = expl.summary || "";
+      document.getElementById("results-subline").textContent = "";
+
+      // Strengths
+      const strengthsList = document.getElementById("strengths-list");
+      strengthsList.innerHTML = (expl.strengths || []).map(s =>
+        `<li>${esc(s)}</li>`
+      ).join("");
+
+      // Gaps
+      const gapsList = document.getElementById("gaps-list");
+      gapsList.innerHTML = (expl.gaps || []).map(g =>
+        `<li>${esc(g)}</li>`
+      ).join("");
+
+      // Recommendations — new shape: impact_tier + impact_range_pct
+      const recs = expl.recommendations || [];
+
+      const recCardsEl = document.getElementById("rec-cards");
+      recCardsEl.innerHTML = recs.map((r, i) => {
+        const tier      = r.impact_tier || "medium";
+        const rangeLow  = Math.round(r.impact_range_pct?.low_pct  || 0);
+        const rangeHigh = Math.round(r.impact_range_pct?.high_pct || 0);
+        const months    = r.timeframe_months || 0;
+        const rangeText = (rangeLow || rangeHigh)
+          ? `+${rangeLow}–${rangeHigh}&nbsp;% mzdy`
+          : "";
+        return `<div class="rec-card" id="rec-card-${i}">
+          <div class="rec-card-top">
+            <span class="rec-title">${esc(r.title)}</span>
+            <div class="rec-badges">
+              <span class="${tierBadgeClass(tier)}">${esc(tierLabel(tier))}</span>
+              ${rangeText ? `<span class="badge-range">${rangeText}</span>` : ""}
+              <span class="badge-time">do ${esc(monthsLabel(months))}</span>
+            </div>
+          </div>
+          <p class="rec-why">${esc(r.why_it_matters)}</p>
+          <div class="rec-action">
+            <span class="rec-action-label">První krok:</span>
+            <span>${esc(r.first_action)}</span>
+          </div>
+        </div>`;
+      }).join("");
+
+      // Warnings block — above salary, amber note
+      const warningsBlock = document.getElementById("warnings-block");
+      if (warnings.length > 0) {
+        warningsBlock.style.display = "";
+        warningsBlock.innerHTML = `<div class="warnings-block">
+          <div class="warnings-block-header">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 2L1.5 13h13L8 2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+              <path d="M8 6v3.5M8 11v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            Upozornění k&nbsp;odhadu
+          </div>
+          <ul class="warnings-list">
+            ${warnings.map(w => `<li>${esc(w)}</li>`).join("")}
+          </ul>
+        </div>`;
+      } else {
+        warningsBlock.style.display = "none";
+        warningsBlock.innerHTML = "";
+      }
+
+      showView("view-results");
+
+      // Stagger reveal
+      requestAnimationFrame(() => {
+        document.querySelectorAll(".stagger-reveal").forEach((el, i) => {
+          setTimeout(() => el.classList.add("revealed"), i * 80);
+        });
+        // Stagger rec cards
+        recs.forEach((_, i) => {
+          const card = document.getElementById(`rec-card-${i}`);
+          if (card) setTimeout(() => card.classList.add("revealed"), 400 + i * 120);
+        });
+      });
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────────────── */
+
+    function doReset() {
+      if (abortController) { abortController.abort(); abortController = null; }
+      selectedFile = null;
+      cvInput.value = "";
+      fileChosen.classList.remove("visible");
+      clearInlineError();
+      submitBtn.disabled = true;
+      // Reset stagger-reveal state
+      document.querySelectorAll(".stagger-reveal").forEach(el => el.classList.remove("revealed"));
+      document.querySelectorAll(".rec-card").forEach(el => el.classList.remove("revealed"));
+      showView("view-upload");
+    }
+
+    resetBtn.addEventListener("click", doReset);
+    resetBtnError.addEventListener("click", doReset);
+
+    /* ── Demo mode (?demo=1) ────────────────────────────────────────────────── */
+
+    const MOCK_RESULT = {
+      score: {
+        total: 73.5,
+        confidence: 0.82,
+        components: [
+          { name: "Pracovní zkušenosti", score: 78, weight: 0.35, reasoning: "8 let v SW vývoji, z toho 3 roky jako tech lead." },
+          { name: "Vzdělání & certifikace", score: 62, weight: 0.20, reasoning: "Bc. informatika, žádné cloud certifikace." },
+          { name: "Technické dovednosti", score: 81, weight: 0.25, reasoning: "Silné znalosti Pythonu, Dockeru a AWS — odpovídají profilu senior BE developera." },
+          { name: "Jazykové kompetence", score: 70, weight: 0.10, reasoning: "Čeština rodilý mluvčí, angličtina B2/C1 dle CV." },
+          { name: "Prezentace projektu", score: 65, weight: 0.10, reasoning: "GitHub uveden, ale veřejné repozitáře jsou prázdné." },
+        ],
+      },
+      salary: {
+        currency: "CZK",
+        low: 78000,
+        mid: 98000,
+        high: 122000,
+        assumptions: [
+          "ISCO 2512 — Vývojáři softwaru; Praha a okolí",
+          "Percentil P25–P75 dle ISPV 2023",
+          "Seniority korekce +18 % oproti mediánu skupiny",
+        ],
+      },
+      explanation: {
+        summary: "Solidní senior backend developer s prokázanou zkušeností v distribuovaných systémech. Hlavní rezervy leží v cloud certifikacích a veřejně viditelném portfoliu — oboje jsou snadno adresovatelné v horizontu 3–6 měsíců.",
+        strengths: [
+          "Hloubka znalostí Pythonu a Dockeru — konzistentní napříč CV",
+          "Tech lead zkušenost na produktu s 50 k+ uživateli",
+          "Angličtina na komunikační úrovni — bez bariéry pro zahraniční projekty",
+          "Prokazatelné výsledky: snížení latence API o 40 %",
+        ],
+        gaps: [
+          "Chybí jakákoli AWS/Azure certifikace — standardní požadavek u seniorů",
+          "Veřejné GitHub repozitáře jsou prázdné — slabší důkaz dovedností",
+          "Žádná zmínka o systémovém designu nebo architecture review",
+        ],
+        recommendations: [
+          {
+            title: "AWS Solutions Architect Associate",
+            why_it_matters: "Certifikace je dnes de facto vstupní podmínkou u většiny produktových firem nad 50 lidí a přímo zvedá senioritu třídu.",
+            impact_tier: "high",
+            impact_range_pct: { low_pct: 10, high_pct: 15 },
+            timeframe_months: 3,
+            first_action: "Zaregistruj se na AWS Skill Builder a projdi Learning Path 'Solutions Architect'.",
+          },
+          {
+            title: "Veřejné portfolio — 1–2 open-source projekty",
+            why_it_matters: "Recruiteři a hiring manažeři pravidelně ověřují GitHub před pohovorem. Prázdný profil snižuje důvěryhodnost i při jinak silném CV.",
+            impact_tier: "medium",
+            impact_range_pct: { low_pct: 5, high_pct: 10 },
+            timeframe_months: 2,
+            first_action: "Vyber nejnovější interní projekt, který lze sdílet (strip confidential data), a pushni ho jako veřejný repozitář se README.",
+          },
+          {
+            title: "System design case study",
+            why_it_matters: "Senior role v ČR nyní rutinně zahrnuje system design interview. Kandidáti, kteří umí prezentovat architektonická rozhodnutí, získávají výrazně lepší nabídky.",
+            impact_tier: "transformative",
+            impact_range_pct: { low_pct: 12, high_pct: 20 },
+            timeframe_months: 6,
+            first_action: "Napiš 1–2 stranový write-up jednoho systému, který jsi navrhoval — motivace, kompromisy, výsledek. Přidej ho na LinkedIn nebo blog.",
+          },
+        ],
+      },
+      warnings: [
+        "Některé pozice v CV jsou bez přesných dat (pouze rok). Odhad mzdy může mít vyšší nejistotu.",
+        "Pro ISCO kód 2512 je v datech ISPV omezený vzorek Praha — rozsah pásma může být širší než obvykle.",
+      ],
+    };
+
+    if (new URLSearchParams(window.location.search).get("demo") === "1") {
+      window._renderResults = renderResults;
+      window._mockResult = MOCK_RESULT;
+      showView("view-loading");
+      startLoading();
+      setTimeout(() => {
+        stopLoading();
+        renderResults(MOCK_RESULT);
+      }, 3500);
+    }
+
+    // Always expose for console testing
+    window._renderResults = renderResults;
+    window._mockResult = MOCK_RESULT;
+    window._showError = showError;
+    window._showView = showView;
+
+    /* ── Init ──────────────────────────────────────────────────────────────── */
+    showView("view-upload");
+  </script>
+</body>
+</html>

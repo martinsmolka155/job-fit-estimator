@@ -68,10 +68,19 @@ class ResumeParser:
             meta["truncated"] = False
 
         system_prompt = self._load_prompt()
-        full_prompt = f"{system_prompt}\n\n{text}"
+        # Wrap CV text in explicit delimiters so the model cannot confuse document
+        # content with instructions (prompt injection mitigation).
+        # The system prompt already instructs the model to treat CV_TEXT strictly as
+        # data to extract from, never as instructions to follow.
+        user_message = f"<CV_TEXT>\n{text}\n</CV_TEXT>"
 
         try:
-            raw_resume, llm_meta = self.llm.extract_structured(full_prompt, Resume, max_tokens=4096)
+            raw_resume, llm_meta = self.llm.extract_structured(
+                user_message,
+                Resume,
+                max_tokens=4096,
+                system_prompt=system_prompt,
+            )
         except LLMProviderError as exc:
             # Tokens were spent before refusal/validation failure. Preserve the
             # cost so the daily budget log reflects real spend, not zero.

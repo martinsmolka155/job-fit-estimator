@@ -25,6 +25,11 @@ _MIN_DIGITAL_CHARS = 30
 # Maximum ratio of non-alphanumeric, non-space characters before classifying as gibberish
 _GIBBERISH_THRESHOLD = 0.30
 
+# Hard cap on PDF page count. CVs are single documents; anything over this is
+# either a combined portfolio, a bulk upload, or a DoS attempt. Rejected with
+# a clear ValueError that maps to HTTP 422 at the API layer.
+_MAX_PDF_PAGES = 30
+
 
 class UnsupportedFormatError(ValueError):
     """Raised when the input file format is not supported (not PDF or DOCX)."""
@@ -43,19 +48,50 @@ def _is_gibberish(text: str) -> bool:
 
 
 def _extract_pdf(file_path: Path) -> ExtractedDocument:
-    """Extract text from a digital PDF using pymupdf4llm."""
+    """Extract text from a digital PDF using pymupdf4llm.
+
+    Returns an ``is_scanned=True`` document for:
+    - corrupt or password-protected files (pymupdf raises)
+    - image-only / near-empty PDFs (scanned without text layer)
+
+    Raises:
+        ValueError: If the PDF exceeds ``_MAX_PDF_PAGES`` (maps to HTTP 422).
+    """
+    # Check page count before expensive text extraction.  Corrupt or
+    # password-protected files often surface here via a fitz exception, which
+    # we convert to the scanned/unsupported sentinel so the caller can produce
+    # a friendly 422 rather than a 500.
+    page_count = _count_pdf_pages(file_path)
+    if page_count == 0:
+        # fitz failed to open the file — corrupt or encrypted PDF.
+        logger.warning("PDF could not be opened (corrupt or encrypted): %s", file_path.name)
+        return ExtractedDocument(
+            text="",
+            source_format="pdf",
+            extraction_method="scanned_unsupported",
+            page_count=0,
+            char_count=0,
+            is_scanned=True,
+        )
+
+    if page_count > _MAX_PDF_PAGES:
+        raise ValueError(
+            f"PDF has {page_count} pages which exceeds the {_MAX_PDF_PAGES}-page limit. "
+            "Please upload a CV document, not a combined portfolio or bulk file."
+        )
+
     try:
         # to_markdown() can return either a single str or a list of dict pages
         # depending on call signature; we always coerce to str for downstream use.
         raw = pymupdf4llm.to_markdown(str(file_path))
         text = raw if isinstance(raw, str) else "\n\n".join(p.get("text", "") for p in raw)
     except Exception:
-        logger.exception("pymupdf4llm failed to extract text from %s", file_path)
+        logger.exception("pymupdf4llm failed to extract text from PDF (logged path omitted)")
         return ExtractedDocument(
             text="",
             source_format="pdf",
             extraction_method="scanned_unsupported",
-            page_count=0,
+            page_count=page_count,
             char_count=0,
             is_scanned=True,
         )
@@ -63,21 +99,17 @@ def _extract_pdf(file_path: Path) -> ExtractedDocument:
     # Detect scanned PDF: too little text or mostly garbage characters
     if len(text.strip()) < _MIN_DIGITAL_CHARS or _is_gibberish(text):
         logger.warning(
-            "PDF appears scanned (chars=%d, path=%s). OCR not supported in MVP.",
+            "PDF appears scanned (chars=%d). OCR not supported in MVP.",
             len(text),
-            file_path,
         )
         return ExtractedDocument(
             text="",
             source_format="pdf",
             extraction_method="scanned_unsupported",
-            page_count=0,
+            page_count=page_count,
             char_count=0,
             is_scanned=True,
         )
-
-    # Count pages via fitz for accurate page_count
-    page_count = _count_pdf_pages(file_path)
 
     return ExtractedDocument(
         text=text,
@@ -90,14 +122,19 @@ def _extract_pdf(file_path: Path) -> ExtractedDocument:
 
 
 def _count_pdf_pages(file_path: Path) -> int:
-    """Count pages in a PDF file."""
+    """Count pages in a PDF file.
+
+    Returns 0 when the file cannot be opened (corrupt, encrypted, truncated).
+    Callers treat 0 as the scanned/unsupported sentinel.
+    Path is intentionally NOT logged to avoid leaking uploaded filenames.
+    """
     try:
         import fitz  # PyMuPDF — bundled with pymupdf4llm
 
         with fitz.open(str(file_path)) as doc:
             return len(doc)
     except Exception:
-        logger.exception("Could not count pages in %s", file_path)
+        logger.warning("Could not count PDF pages — file may be corrupt or encrypted")
         return 0
 
 

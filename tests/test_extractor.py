@@ -187,3 +187,62 @@ class TestIsGibberish:
 
         # Empty string — gibberish
         assert _is_gibberish("") is True
+
+
+class TestPageLimitGuard:
+    def test_oversized_pdf_raises_value_error(self) -> None:
+        """PDFs exceeding _MAX_PDF_PAGES must raise ValueError (maps to HTTP 422)."""
+        from src.extractor import _MAX_PDF_PAGES
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        try:
+            # Build a PDF with _MAX_PDF_PAGES + 1 pages.
+            c = canvas.Canvas(str(tmp_path), pagesize=A4)
+            for i in range(_MAX_PDF_PAGES + 1):
+                c.setFont("Helvetica", 11)
+                c.drawString(50, 750, f"Page {i + 1} — Jan Novák Python developer Praha")
+                c.showPage()
+            c.save()
+
+            with pytest.raises(ValueError, match="pages"):
+                extract_text(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_pdf_at_page_limit_is_accepted(self) -> None:
+        """A PDF with exactly _MAX_PDF_PAGES pages must NOT be rejected."""
+        from src.extractor import _MAX_PDF_PAGES
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        try:
+            c = canvas.Canvas(str(tmp_path), pagesize=A4)
+            for i in range(_MAX_PDF_PAGES):
+                c.setFont("Helvetica", 11)
+                c.drawString(50, 750, f"Page {i + 1} — Jan Novák Python developer Praha")
+                c.showPage()
+            c.save()
+
+            result = extract_text(tmp_path)
+            # Should not raise; must extract text
+            assert result.is_scanned is False
+            assert result.page_count == _MAX_PDF_PAGES
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_corrupt_pdf_returns_scanned_sentinel(self) -> None:
+        """A corrupt (unreadable) PDF must return is_scanned=True, not crash."""
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(b"this is not a valid PDF file")
+            tmp_path = Path(tmp.name)
+
+        try:
+            result = extract_text(tmp_path)
+            assert result.is_scanned is True
+            assert result.text == ""
+            assert result.extraction_method == "scanned_unsupported"
+        finally:
+            tmp_path.unlink(missing_ok=True)

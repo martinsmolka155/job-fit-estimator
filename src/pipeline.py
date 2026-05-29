@@ -26,7 +26,7 @@ from src.estimator import SalaryEstimator
 from src.explainer import Explainer
 from src.extractor import UnsupportedFormatError, extract_text
 from src.llm_provider import estimate_run_cost_usd, get_provider
-from src.logging_config import bind_run_id, configure_logging
+from src.logging_config import bind_run_id
 from src.parser import ResumeParser
 from src.paths import INFLATION_FACTORS_PATH, ISPV_XLSX_PATH
 from src.salary_ispv import ISPVLoader, ISPVLookupError
@@ -130,7 +130,6 @@ class Pipeline:
             UnsupportedFormatError: If the file format is not PDF or DOCX.
         """
         run_id = new_run_id()
-        configure_logging()
         bind_run_id(run_id)
 
         # Pre-flight budget reservation, scaled to the actual model selection.
@@ -176,7 +175,8 @@ class Pipeline:
         run_error: str | None = None
 
         # ── Step 1: Extract ──────────────────────────────────────────────────
-        logger.info("Pipeline step 1/6: extract — %s", file_path.name)
+        # Log suffix only — the uploaded filename can contain a candidate's name.
+        logger.info("Pipeline step 1/6: extract — suffix=%s", file_path.suffix)
         step_start = time.monotonic()
         try:
             doc = extract_text(file_path)
@@ -188,7 +188,7 @@ class Pipeline:
                 "duration_s": time.monotonic() - step_start,
             }
         except UnsupportedFormatError:
-            logger.exception("Unsupported file format: %s", file_path.suffix)
+            logger.exception("Unsupported file format: suffix=%s", file_path.suffix)
             meta["steps"]["extract"] = {
                 "status": "error",
                 "duration_s": time.monotonic() - step_start,
@@ -428,7 +428,8 @@ class Pipeline:
         cost_record = CostRecord(
             run_id=run_id,
             timestamp_utc=datetime.now(UTC).isoformat(),
-            fixture_or_file=str(file_path),
+            # Store suffix only — the original filename can contain PII (candidate name).
+            fixture_or_file=f"upload{file_path.suffix}",
             total_cost_usd=total_cost,
             parse_cost_usd=parse_cost,
             explain_cost_usd=explain_cost,

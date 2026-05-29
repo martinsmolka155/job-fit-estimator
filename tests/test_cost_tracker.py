@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from src.cost_tracker import (
     BudgetExceededError,
     CostRecord,
     _budget_from_settings,  # pyright: ignore[reportPrivateUsage]
+    _budget_lock,  # pyright: ignore[reportPrivateUsage]
     check_budget,
     daily_spent,
     new_run_id,
@@ -184,3 +186,81 @@ class TestBudgetFromSettings:
         monkeypatch.delenv("DAILY_API_BUDGET_USD", raising=False)
         result = _budget_from_settings()
         assert result == pytest.approx(DEFAULT_BUDGET_USD)
+
+
+class TestBudgetLock:
+    def test_check_budget_acquires_then_releases_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """check_budget must release the lock on success so subsequent calls can proceed."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "10.00")
+        log = tmp_path / ".cost_log.jsonl"
+        # Call once — lock must be released after returning.
+        check_budget(estimated_cost_usd=0.01, log_path=log)
+        # A second call must not deadlock.
+        check_budget(estimated_cost_usd=0.01, log_path=log)
+
+    def test_check_budget_releases_lock_on_raise(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lock must be released even when BudgetExceededError is raised."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.01")
+        log = tmp_path / ".cost_log.jsonl"
+        with pytest.raises(BudgetExceededError):
+            check_budget(estimated_cost_usd=1.00, log_path=log)
+        # Lock must be acquirable again after the exception.
+        assert _budget_lock.acquire(blocking=False), "Lock not released after BudgetExceededError"
+        _budget_lock.release()
+
+    def test_concurrent_requests_see_toctou_protection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two threads calling check_budget concurrently must not both pass when budget is tight.
+
+        This is a best-effort race test: we set a budget of $0.05 and fire two
+        threads each trying to spend $0.04.  Without the lock at least one of
+        the recorded amounts would be wrong; with the lock only one should be
+        allowed to pass (the second sees the first's record already written).
+
+        Note: the test is inherently timing-dependent.  We use a barrier to
+        maximise the chance of a genuine race.
+        """
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.05")
+        log = tmp_path / ".cost_log.jsonl"
+
+        results: list[str] = []
+        barrier = threading.Barrier(2)
+
+        def _try_spend() -> None:
+            barrier.wait()  # both threads race to check_budget simultaneously
+            try:
+                check_budget(estimated_cost_usd=0.04, log_path=log)
+                # Immediately record spend so the second thread sees it.
+                rec = CostRecord(
+                    run_id=new_run_id(),
+                    timestamp_utc=datetime.now(UTC).isoformat(),
+                    fixture_or_file="test.pdf",
+                    total_cost_usd=0.04,
+                    parse_cost_usd=0.04,
+                    explain_cost_usd=0.0,
+                    embed_cost_usd=0.0,
+                    duration_s=0.1,
+                )
+                record_run(rec, log_path=log)
+                results.append("ok")
+            except BudgetExceededError:
+                results.append("blocked")
+
+        t1 = threading.Thread(target=_try_spend)
+        t2 = threading.Thread(target=_try_spend)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert len(results) == 2
+        # At least one thread must have been blocked — the budget was too tight for both.
+        # (Both passing would mean TOCTOU was not prevented.)
+        assert results.count("ok") <= 1, (
+            f"Both threads passed the budget check — TOCTOU protection may be broken: {results}"
+        )

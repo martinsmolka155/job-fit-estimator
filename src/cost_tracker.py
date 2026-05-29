@@ -5,12 +5,20 @@ Budget: read from env DAILY_API_BUDGET_USD (default 5.00).
 
 Raises BudgetExceededError BEFORE making LLM calls when budget would be
 exceeded. Warns (does not raise) when 90%+ of budget consumed.
+
+Concurrency note: ``_budget_lock`` serialises the check_budget()+record_run()
+pair within one OS process, closing the TOCTOU window where two simultaneous
+requests each read "under budget" before either has written its cost record.
+This protection is per-process only. A multi-worker deploy (uvicorn --workers N,
+Gunicorn, etc.) needs a shared store (e.g. Redis atomic increment) or must be
+run with ``--workers 1`` to get the same guarantee.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -26,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BUDGET_USD = 5.00
 WARN_THRESHOLD_PCT = 0.90
+
+# Serialises check_budget() + record_run() within one process.
+# See module docstring for multi-worker caveat.
+_budget_lock = threading.Lock()
 
 
 class BudgetExceededError(RuntimeError):
@@ -98,7 +110,18 @@ def check_budget(estimated_cost_usd: float, log_path: Path = DEFAULT_COST_LOG_PA
     """Raise BudgetExceededError if estimated_cost would push today over budget.
 
     Warn (log only) at 90%+ of budget consumed.
+
+    Acquires ``_budget_lock`` so that concurrent requests in the same process
+    cannot both pass the budget check before either records its spend.
+    Call ``record_run`` while still holding the lock — or use the combined
+    helper ``check_and_record`` — to maintain the guarantee.
     """
+    with _budget_lock:
+        _check_budget_locked(estimated_cost_usd, log_path)
+
+
+def _check_budget_locked(estimated_cost_usd: float, log_path: Path) -> None:
+    """Inner check — must be called with ``_budget_lock`` held."""
     budget = _budget_from_settings()
     spent = daily_spent(log_path)
     projected = spent + estimated_cost_usd
@@ -122,6 +145,24 @@ def record_run(record: CostRecord, log_path: Path = DEFAULT_COST_LOG_PATH) -> No
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+
+
+def atomic_check_and_record(
+    estimated_cost_usd: float,
+    record: CostRecord,
+    log_path: Path = DEFAULT_COST_LOG_PATH,
+) -> None:
+    """Check the budget and append the cost record in a single locked operation.
+
+    Preferred over separate ``check_budget`` + ``record_run`` calls when the
+    caller wants the TOCTOU window fully closed: no second coroutine/thread can
+    slip past the check between these two steps.
+    """
+    with _budget_lock:
+        _check_budget_locked(estimated_cost_usd, log_path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
 
 
 def new_run_id() -> str:

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -39,6 +40,22 @@ def _upload(client: TestClient, suffix: str = ".pdf") -> httpx.Response:
     )
 
 
+def _make_pipeline_result(**meta_overrides: Any) -> MagicMock:
+    """Build a mock PipelineResult whose model_dump returns a minimal valid dict."""
+    result = MagicMock()
+    result.validation_flags = []
+    result.score = MagicMock(confidence=0.9)
+    result.meta = {"salary_data": None, **meta_overrides}
+    result.model_dump.return_value = {"score": {"total": 80}}
+    return result
+
+
+def test_index_returns_html(client: TestClient) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
 def test_health_returns_ok(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
@@ -54,14 +71,201 @@ def test_unsupported_extension_returns_415(client: TestClient) -> None:
     assert "Unsupported file type" in response.json()["detail"]
 
 
-def test_budget_exceeded_returns_429(client: TestClient) -> None:
-    """BudgetExceededError must be surfaced as 429 — operational state, not 500."""
+# ---------------------------------------------------------------------------
+# Fix 1: error leakage — budget/spent values must NOT appear in HTTP responses
+# ---------------------------------------------------------------------------
+
+
+def test_budget_exceeded_returns_429_with_generic_message(client: TestClient) -> None:
+    """BudgetExceededError must be surfaced as 429 with a generic message.
+
+    The original detail=str(e) leaked "spent=4.98 budget=5.00" internals.
+    After the fix the detail must be a generic Czech string with no financial
+    figures or 'budget'/'spent' tokens.
+    """
     with patch.object(api, "Pipeline") as mock_pipeline_cls:
-        mock_pipeline_cls.return_value.run.side_effect = BudgetExceededError("over budget")
+        mock_pipeline_cls.return_value.run.side_effect = BudgetExceededError(
+            "spent=4.98 budget=5.00 exceeded"
+        )
         response = _upload(client)
 
     assert response.status_code == 429
-    assert "over budget" in response.json()["detail"]
+    detail = response.json()["detail"]
+    # Must NOT leak budget figures
+    assert "spent" not in detail.lower(), f"Leaks 'spent' in detail: {detail!r}"
+    assert "budget" not in detail.lower(), f"Leaks 'budget' in detail: {detail!r}"
+    assert "4.98" not in detail, f"Leaks numeric figure in detail: {detail!r}"
+    # Must be a non-empty user-facing message
+    assert len(detail) > 10
+
+
+def test_generic_exception_returns_500_without_internals(client: TestClient) -> None:
+    """Unexpected pipeline exceptions must return 500 with a safe generic message.
+
+    The original detail=f"Pipeline failed: {e}" leaked exception text.
+    """
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.side_effect = RuntimeError(
+            "db connection string: postgres://user:secret@host/db"
+        )
+        response = _upload(client)
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    # Must NOT echo the original exception message
+    assert "postgres" not in detail.lower(), f"Leaks exception in detail: {detail!r}"
+    assert "secret" not in detail, f"Leaks secret in detail: {detail!r}"
+    assert "Pipeline failed" not in detail, f"Old error format leaked: {detail!r}"
+    assert len(detail) > 10
+
+
+def test_infrastructure_error_returns_502_without_internals(client: TestClient) -> None:
+    """PipelineInfrastructureError detail must NOT contain prompt paths or LLM details."""
+    from src.pipeline import PipelineInfrastructureError
+
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.side_effect = PipelineInfrastructureError(
+            "OpenAI outage — prompts/cv_parser_system.txt missing"
+        )
+        response = _upload(client)
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "prompts/" not in detail, f"Leaks file path in detail: {detail!r}"
+    assert "OpenAI outage" not in detail, f"Leaks internal message: {detail!r}"
+    assert len(detail) > 10
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: temp-file cleanup when cv.read() raises mid-stream
+# ---------------------------------------------------------------------------
+
+
+def test_tempfile_cleaned_up_when_pipeline_raises(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If Pipeline() constructor raises, the uploaded temp file must NOT leak."""
+    leaked_paths: list[Path] = []
+    real_named_tempfile = api.tempfile.NamedTemporaryFile
+
+    def _tracking_tempfile(*args: object, **kwargs: object) -> object:
+        handle = real_named_tempfile(*args, **kwargs)  # type: ignore[arg-type]
+        leaked_paths.append(Path(handle.name))
+        return handle
+
+    monkeypatch.setattr(api.tempfile, "NamedTemporaryFile", _tracking_tempfile)
+
+    with patch.object(api, "Pipeline", side_effect=RuntimeError("boom")):
+        response = _upload(client)
+
+    assert response.status_code == 500
+    assert leaked_paths, "tempfile fixture not exercised"
+    for path in leaked_paths:
+        assert not path.exists(), f"Tempfile leaked on Pipeline init failure: {path}"
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: scanned/corrupt PDF → 422 not 500
+# ---------------------------------------------------------------------------
+
+
+def test_scanned_pdf_returns_422(client: TestClient) -> None:
+    """A ValueError('Scanned PDF...') from the pipeline must map to 422, not 500."""
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.side_effect = ValueError(
+            "Scanned PDF detected. OCR is not supported in MVP."
+        )
+        response = _upload(client)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # Must contain a helpful hint about text-based PDF
+    assert "sken" in detail.lower() or "text" in detail.lower(), (
+        f"Expected hint about scanned PDF in detail: {detail!r}"
+    )
+
+
+def test_page_limit_exceeded_returns_422(client: TestClient) -> None:
+    """A ValueError about page limit must map to 422 with a friendly message."""
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.side_effect = ValueError(
+            "PDF has 45 pages which exceeds the 30-page limit."
+        )
+        response = _upload(client)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "stran" in detail.lower() or "pages" in detail.lower(), (
+        f"Expected page-limit hint in detail: {detail!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: warnings surface in /analyze response
+# ---------------------------------------------------------------------------
+
+
+def test_warnings_present_in_analyze_response_for_low_confidence(client: TestClient) -> None:
+    """A low-confidence result must include at least one warning in the response."""
+    from src.schemas import ValidationFlag
+
+    result = _make_pipeline_result()
+    # Inject a hallucination warning flag
+    flag = MagicMock(spec=ValidationFlag)
+    flag.severity = "warning"
+    result.validation_flags = [flag]
+    result.score = MagicMock(confidence=0.4)
+
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.return_value = result
+        response = _upload(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "warnings" in body, "Response must contain 'warnings' key"
+    assert isinstance(body["warnings"], list)
+    assert len(body["warnings"]) > 0, "Expected at least one warning for low-confidence result"
+
+
+def test_warnings_empty_for_nominal_result(client: TestClient) -> None:
+    """A clean, high-confidence result must have an empty warnings list."""
+    result = _make_pipeline_result()
+    result.validation_flags = []
+    result.score = MagicMock(confidence=0.95)
+
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.return_value = result
+        response = _upload(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "warnings" in body
+    assert body["warnings"] == [], f"Expected empty warnings for nominal result: {body['warnings']}"
+
+
+def test_warnings_salary_family_fallback(client: TestClient) -> None:
+    """A family_fallback ISCO match must produce a salary approximation warning."""
+    result = _make_pipeline_result(
+        salary_data={
+            "isco_match_level": "family_fallback",
+            "confidence": "medium",
+        }
+    )
+
+    with patch.object(api, "Pipeline") as mock_pipeline_cls:
+        mock_pipeline_cls.return_value.run.return_value = result
+        response = _upload(client)
+
+    assert response.status_code == 200
+    warnings = response.json()["warnings"]
+    assert any("mzda" in w.lower() or "přibližně" in w.lower() for w in warnings), (
+        f"Expected salary approximation warning, got: {warnings}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Existing status-code contract tests (unchanged behaviour)
+# ---------------------------------------------------------------------------
 
 
 def test_ispv_data_missing_returns_503(client: TestClient) -> None:
@@ -85,49 +289,6 @@ def test_missing_isco_returns_422(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_pipeline_init_failure_cleans_up_tempfile(
-    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """If Pipeline() constructor raises, the uploaded temp file must NOT leak.
-
-    Regression for the prior ordering where Pipeline(...) lived OUTSIDE the
-    try/finally block and bypassed both the HTTP error mapping and the
-    temp-file cleanup.
-    """
-    leaked_paths: list[Path] = []
-    real_named_tempfile = api.tempfile.NamedTemporaryFile
-
-    def _tracking_tempfile(*args: object, **kwargs: object) -> object:
-        handle = real_named_tempfile(*args, **kwargs)  # type: ignore[arg-type]
-        leaked_paths.append(Path(handle.name))
-        return handle
-
-    monkeypatch.setattr(api.tempfile, "NamedTemporaryFile", _tracking_tempfile)
-
-    with patch.object(api, "Pipeline", side_effect=RuntimeError("boom")):
-        response = _upload(client)
-
-    assert response.status_code == 500
-    # Temp file must be cleaned up even though Pipeline() raised before run().
-    assert leaked_paths, "tempfile fixture not exercised"
-    for path in leaked_paths:
-        assert not path.exists(), f"Tempfile leaked on Pipeline init failure: {path}"
-
-
-def test_pipeline_infrastructure_error_returns_502(client: TestClient) -> None:
-    """Parser/LLM provider failures must surface as 5xx, not as 422 'bad CV'."""
-    from src.pipeline import PipelineInfrastructureError
-
-    with patch.object(api, "Pipeline") as mock_pipeline_cls:
-        mock_pipeline_cls.return_value.run.side_effect = PipelineInfrastructureError(
-            "OpenAI outage"
-        )
-        response = _upload(client)
-
-    assert response.status_code == 502
-    assert "OpenAI outage" in response.json()["detail"]
-
-
 def test_rate_limit_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """A client over its per-IP quota gets 429 with a Retry-After header."""
     from src.rate_limit import SlidingWindowRateLimiter
@@ -136,7 +297,7 @@ def test_rate_limit_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPa
         api, "rate_limiter", SlidingWindowRateLimiter(max_requests=1, window_seconds=3600)
     )
     with patch.object(api, "Pipeline") as mock_pipeline_cls:
-        mock_pipeline_cls.return_value.run.return_value.model_dump.return_value = {"ok": True}
+        mock_pipeline_cls.return_value.run.return_value = _make_pipeline_result()
         first = _upload(client)
         second = _upload(client)
 

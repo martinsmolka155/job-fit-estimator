@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Education(BaseModel):
@@ -149,15 +149,39 @@ class SalaryEstimate(BaseModel):
     )
 
 
+class ImpactRange(BaseModel):
+    """Realistic salary-uplift range for a recommendation (conveys uncertainty honestly)."""
+
+    low_pct: float = Field(ge=0, le=100, description="Lower bound of realistic salary uplift (%)")
+    high_pct: float = Field(ge=0, le=100, description="Upper bound of realistic salary uplift (%)")
+
+    @model_validator(mode="after")
+    def low_must_not_exceed_high(self) -> ImpactRange:
+        if self.low_pct > self.high_pct:
+            raise ValueError(
+                f"ImpactRange: low_pct ({self.low_pct}) must be <= high_pct ({self.high_pct})"
+            )
+        return self
+
+
 class Recommendation(BaseModel):
     """Single actionable career recommendation."""
 
     title: str = Field(description="Short actionable title, e.g. 'Master Kubernetes in production'")
     why_it_matters: str = Field(description="1-2 sentences on why this recommendation, not others")
-    estimated_salary_impact_pct: float = Field(
-        ge=0,
-        le=100,
-        description="Realistic salary uplift estimate in percent (5-15 typical per recommendation)",
+    impact_tier: Literal["medium", "high", "transformative"] = Field(
+        description=(
+            "Qualitative impact category: "
+            "medium = 5–15% salary uplift, "
+            "high = 15–30% salary uplift, "
+            "transformative = 30%+ uplift (role change, major specialisation)"
+        )
+    )
+    impact_range_pct: ImpactRange = Field(
+        description=(
+            "Realistic salary-uplift RANGE in percent. Use a range that reflects genuine "
+            "uncertainty — e.g. low=5, high=15. Do NOT use a single inflated point estimate."
+        )
     )
     timeframe_months: int = Field(
         ge=1,
@@ -174,7 +198,11 @@ class Explanation(BaseModel):
     strengths: list[str] = Field(description="3-5 specific strengths (never generic)")
     gaps: list[str] = Field(description="3-5 actionable gaps (never 'more experience')")
     recommendations: list[Recommendation] = Field(
-        description="Exactly 3 recommendations whose estimated_salary_impact_pct sum >= 30%"
+        description=(
+            "Exactly 3 honest, distinct recommendations. Each must have a realistic "
+            "impact_tier and impact_range_pct (a range, not a point). "
+            "Do NOT inflate impact to hit an artificial sum target."
+        )
     )
 
     @field_validator("recommendations")

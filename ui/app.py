@@ -484,7 +484,9 @@ def render_recommendations_tab(result: PipelineResult) -> None:
     st.subheader("Doporučení")
     for i, rec in enumerate(explanation.recommendations, 1):
         with st.expander(
-            f"{i}. {rec.title} (+{rec.estimated_salary_impact_pct:.0f} %, {rec.timeframe_months} měs.)"
+            f"{i}. {rec.title} "
+            f"(+{rec.impact_range_pct.low_pct:.0f}–{rec.impact_range_pct.high_pct:.0f} %, "
+            f"{rec.timeframe_months} měs.)"
         ):
             st.markdown(
                 f'<div style="margin-bottom:12px;">'
@@ -501,7 +503,11 @@ def render_recommendations_tab(result: PipelineResult) -> None:
                 unsafe_allow_html=True,
             )
             st.markdown(
-                f'<div class="jfe-stat-label">Odhadovaný dopad na mzdu: +{rec.estimated_salary_impact_pct:.0f}%</div>',
+                f'<div class="jfe-stat-label">'
+                f"Odhadovaný dopad na mzdu: "
+                f"+{rec.impact_range_pct.low_pct:.0f}–{rec.impact_range_pct.high_pct:.0f}% "
+                f"({rec.impact_tier})"
+                f"</div>",
                 unsafe_allow_html=True,
             )
 

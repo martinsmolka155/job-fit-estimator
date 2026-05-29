@@ -88,8 +88,18 @@ class LLMProvider(ABC):
         prompt: str,
         schema: type[BaseModel],
         max_tokens: int = 4096,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[BaseModel, dict[str, Any]]:
         """Extract structured data from prompt into schema.
+
+        When system_prompt is provided, it is sent as the system message and
+        `prompt` becomes the user message.  This separates trusted instructions
+        from untrusted user/document content and is the preferred call pattern
+        for CV parsing and other untrusted-input flows.
+
+        When system_prompt is None (legacy callers), `prompt` is sent as a
+        single user message as before.
 
         Returns:
             (parsed_model, meta) where meta contains:
@@ -123,14 +133,30 @@ class OpenAIProvider(LLMProvider):
         prompt: str,
         schema: type[BaseModel],
         max_tokens: int = 4096,
+        *,
+        system_prompt: str | None = None,
     ) -> tuple[BaseModel, dict[str, Any]]:
         """Call OpenAI beta parse endpoint, retry up to 3 times with backoff.
 
         Uses response_format=schema for Structured Outputs.
         Respects Retry-After header on RateLimitError.
+
+        When system_prompt is provided, it is sent as role=system and `prompt`
+        as role=user — this separates trusted instructions from untrusted document
+        content (prompt injection mitigation).
         """
         delays = [1.0, 2.0, 4.0]
         last_exception: Exception | None = None
+
+        # Build message list: system message + user message when system_prompt is
+        # given, otherwise a single user message (backward-compatible).
+        if system_prompt is not None:
+            messages: list[dict[str, str]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+        else:
+            messages = [{"role": "user", "content": prompt}]
 
         for attempt, delay in enumerate(delays):
             start = time.monotonic()
@@ -144,7 +170,7 @@ class OpenAIProvider(LLMProvider):
                 # See decisions/2026-05-05-dynamic-salary.md "gpt-5 gotchas" section.
                 kwargs: dict[str, Any] = {
                     "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "response_format": schema,
                 }
                 if self.model.startswith("gpt-5"):

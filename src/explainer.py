@@ -1,6 +1,7 @@
 """LLM-based career advisor / explainer.
 
-Produces Explanation with exactly 3 Recommendations (sum impact >= 30%).
+Produces Explanation with exactly 3 Recommendations.
+Impact is conveyed as an honest tier + range, never as an artificial point sum.
 MAX_RETRIES = 3 — hardcap, no infinite loop.
 Prompt lives in prompts/explainer_system.txt — no inline prompts here.
 """
@@ -18,7 +19,6 @@ from src.schemas import Explanation, Resume, SalaryEstimate, SeniorityScore
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3  # hardcap — no infinite loop
-_MIN_TOTAL_IMPACT_PCT = 30.0
 
 
 def _total_experience_years(resume: Resume) -> int:
@@ -44,13 +44,14 @@ def _total_experience_years(resume: Resume) -> int:
 
 
 class Explainer:
-    """Generates career analysis with 3 recommendations using LLM.
+    """Generates career analysis with exactly 3 recommendations using LLM.
 
-    Retries up to MAX_RETRIES if:
-    - LLM returns fewer than 3 recommendations
-    - Total estimated_salary_impact_pct is below 30%
+    Retries up to MAX_RETRIES if the LLM call raises or returns fewer than
+    3 recommendations.  There is no longer a ≥30% impact-sum requirement —
+    that constraint pressured the model to fabricate inflated percentages.
+    Impact is now expressed as impact_tier + impact_range_pct (low..high).
 
-    After MAX_RETRIES, returns last result with warning in meta.
+    After MAX_RETRIES, returns last result (or fallback) with error in meta.
     """
 
     def __init__(self, llm: LLMProvider) -> None:
@@ -68,9 +69,15 @@ class Explainer:
             self._system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
         return self._system_prompt
 
-    def _build_prompt(self, resume: Resume, score: SeniorityScore, salary: SalaryEstimate) -> str:
-        """Build the full prompt including candidate data."""
-        system = self._load_prompt()
+    def _build_user_message(
+        self, resume: Resume, score: SeniorityScore, salary: SalaryEstimate
+    ) -> str:
+        """Build the user-message candidate summary, isolated from the system prompt.
+
+        The candidate summary is derived from the parsed Resume — which in turn was
+        extracted from untrusted CV text.  Wrapping it in <CANDIDATE_PROFILE> tags
+        makes it explicit to the model that this is structured data, not instructions.
+        """
         candidate_summary = (
             f"Name: {resume.full_name or 'Unknown'}\n"
             f"Location: {resume.location or 'Not specified'}\n"
@@ -81,7 +88,7 @@ class Explainer:
             f"Salary estimate: {salary.low:,}–{salary.high:,} CZK/month\n"
             f"Salary assumptions: {', '.join(salary.assumptions[:3])}\n"
         )
-        return f"{system}\n\n{candidate_summary}"
+        return f"<CANDIDATE_PROFILE>\n{candidate_summary}</CANDIDATE_PROFILE>"
 
     def explain(
         self,
@@ -89,10 +96,15 @@ class Explainer:
         score: SeniorityScore,
         salary: SalaryEstimate,
     ) -> tuple[Explanation, dict[str, Any]]:
-        """Generate Explanation with exactly 3 recommendations summing to >= 30% impact.
+        """Generate Explanation with exactly 3 recommendations.
 
-        Retries up to MAX_RETRIES=3 times if quality check fails.
-        After exhausting retries, returns last result with warning in meta.
+        Retries up to MAX_RETRIES=3 times on LLM failure (raises or returns
+        fewer than 3 recommendations).  The ≥30% impact-sum constraint has been
+        removed — impact is now expressed as honest tier + range, not inflated
+        point estimates.
+
+        Cost is accumulated across all attempts so meta.cost_usd reflects the
+        total spend even when retries are needed.
 
         Args:
             resume: Parsed candidate Resume.
@@ -100,76 +112,65 @@ class Explainer:
             salary: SalaryEstimate from estimator.
 
         Returns:
-            (Explanation, meta) where meta includes retries count and optional warning.
+            (Explanation, meta) where meta includes retries count, accumulated
+            cost_usd, and error key on total failure.
         """
-        base_prompt = self._build_prompt(resume, score, salary)
+        system_prompt = self._load_prompt()
+        user_message = self._build_user_message(resume, score, salary)
         last_explanation: Explanation | None = None
         last_meta: dict[str, Any] = {}
+        accumulated_cost: float = 0.0
 
         for attempt in range(MAX_RETRIES):
-            prompt = base_prompt
-            if attempt > 0:
-                prompt += (
-                    f"\n\nPREVIOUS ATTEMPT FAILED: total salary impact was below {_MIN_TOTAL_IMPACT_PCT}%. "
-                    f"You MUST provide 3 recommendations whose estimated_salary_impact_pct "
-                    f"sum to AT LEAST {_MIN_TOTAL_IMPACT_PCT}. Focus on high-impact areas: "
-                    f"specialization, certifications, role transitions."
-                )
-
             try:
                 raw_explanation, meta = self.llm.extract_structured(
-                    prompt, Explanation, max_tokens=4096
+                    user_message,
+                    Explanation,
+                    max_tokens=4096,
+                    system_prompt=system_prompt,
                 )
                 explanation = cast("Explanation", raw_explanation)
             except LLMProviderError as exc:
                 logger.exception("LLM call failed on explainer attempt %d", attempt + 1)
-                # Preserve partial cost so retries don't silently burn the budget.
+                # Accumulate partial cost — each retry burns real tokens.
+                accumulated_cost += exc.cost_usd
                 last_meta = {
                     **exc.meta,
-                    "cost_usd": exc.cost_usd,
+                    "cost_usd": accumulated_cost,
                     "error": "llm_failed",
                     "retries": attempt + 1,
                 }
                 continue
             except Exception:
                 logger.exception("LLM call failed on explainer attempt %d", attempt + 1)
-                last_meta = {"cost_usd": 0.0, "error": "llm_failed", "retries": attempt + 1}
+                last_meta = {
+                    "cost_usd": accumulated_cost,
+                    "error": "llm_failed",
+                    "retries": attempt + 1,
+                }
                 continue
 
+            # Accumulate cost across attempts so total spend is always visible.
+            attempt_cost: float = meta.get("cost_usd", 0.0)
+            accumulated_cost += attempt_cost
             last_explanation = explanation
-            last_meta = {**meta, "retries": attempt}
+            last_meta = {**meta, "cost_usd": accumulated_cost, "retries": attempt}
 
-            total_impact = sum(r.estimated_salary_impact_pct for r in explanation.recommendations)
-
-            if total_impact >= _MIN_TOTAL_IMPACT_PCT and len(explanation.recommendations) == 3:
+            if len(explanation.recommendations) == 3:
                 logger.info(
-                    "Explainer succeeded on attempt %d — total impact: %.1f%%",
+                    "Explainer succeeded on attempt %d",
                     attempt + 1,
-                    total_impact,
                 )
                 return explanation, last_meta
 
             logger.warning(
-                "Explainer attempt %d/%d failed quality check: "
-                "%d recs, total impact %.1f%% (need >= %.1f%%)",
+                "Explainer attempt %d/%d: got %d recommendations (need 3)",
                 attempt + 1,
                 MAX_RETRIES,
                 len(explanation.recommendations),
-                total_impact,
-                _MIN_TOTAL_IMPACT_PCT,
             )
 
-        # Exhausted all retries — return last result with warning
-        logger.warning(
-            "Explainer failed to produce %.1f%%+ recommendations after %d retries",
-            _MIN_TOTAL_IMPACT_PCT,
-            MAX_RETRIES,
-        )
-
-        # Distinguish two failure modes:
-        #   (a) every LLM call raised → last_explanation is None → "llm_failed"
-        #   (b) calls succeeded but never met the quality bar → "below_30pct_target"
-        # The two are mutually exclusive; stacking both used to confuse metrics.
+        # Exhausted all retries.
         all_calls_failed = last_explanation is None
 
         if all_calls_failed:
@@ -186,17 +187,20 @@ class Explainer:
                 raise RuntimeError("Explainer: LLM failed and fallback creation failed") from exc
 
         last_meta["retries"] = MAX_RETRIES
-        if not all_calls_failed:
-            # Quality threshold never met — surface the dedicated warning.
-            last_meta["warning"] = "below_30pct_target"
-        # If all_calls_failed, last_meta already carries error="llm_failed" from
-        # the last attempt; do not also set warning="below_30pct_target".
+        last_meta["cost_usd"] = accumulated_cost
+        # Only set error when every call raised — not when the model returned a
+        # structurally valid but incomplete result.
+        if all_calls_failed and "error" not in last_meta:
+            last_meta["error"] = "llm_failed"
         return last_explanation, last_meta
 
 
 def _fallback_recommendation(index: int) -> Any:
-    """Minimal fallback recommendation when all LLM calls fail."""
-    from src.schemas import Recommendation
+    """Minimal fallback recommendation when all LLM calls fail.
+
+    Uses the new impact_tier + impact_range_pct shape (no fabricated point %).
+    """
+    from src.schemas import ImpactRange, Recommendation
 
     titles = [
         "Consult a career advisor",
@@ -206,7 +210,8 @@ def _fallback_recommendation(index: int) -> Any:
     return Recommendation(
         title=titles[index],
         why_it_matters="LLM analysis unavailable — this is a placeholder recommendation.",
-        estimated_salary_impact_pct=10.0,
+        impact_tier="medium",
+        impact_range_pct=ImpactRange(low_pct=5.0, high_pct=15.0),
         timeframe_months=6,
         first_action="Contact your career advisor or retry the analysis.",
     )

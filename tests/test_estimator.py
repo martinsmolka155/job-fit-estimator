@@ -472,50 +472,190 @@ class TestEstimatorProperties:
 
 
 class TestISCOWhitelistFallback:
-    """Bug 1 regression: whitelist miss must trigger family fallback, not hard error."""
+    """Fix 2: whitelist miss must route through ISPVLoader.lookup() prefix chain first,
+    then occupation_family fallback as last resort.
+    """
 
-    def test_whitelist_miss_triggers_family_fallback(self) -> None:
-        """When isco_code absent from known_codes(), best_code_for_family() provides fallback."""
+    def test_whitelist_miss_uses_prefix_fallback_first(self) -> None:
+        """When isco_code absent from known_codes(), ISPVLoader.lookup() is tried first.
+
+        If loader.lookup() succeeds (via its 3→2→1 digit prefix chain), the
+        occupation_family fallback must NOT be called.
+        """
+        salary_data = _make_salary_data(isco_code="2511")  # 3-digit prefix match
+        loader = _make_mock_loader(salary_data)
+        # "2519" not in whitelist, but loader.lookup("2519") succeeds via prefix
+        loader.known_codes.return_value = frozenset({"2512"})  # "2519" NOT in set
+        loader.lookup.return_value = salary_data  # prefix match succeeds
+
+        resume = _make_resume_with_isco(isco_code="2519", occupation_family="it")
+        estimator = SalaryEstimator(ispv_loader=loader)
+
+        result = estimator.estimate(resume, _make_score(70.0))
+
+        assert result.currency == "CZK"
+        assert result.low > 0
+        # loader.lookup must have been called with "2519" (prefix chain attempt)
+        loader.lookup.assert_called_with("2519")
+        # Family fallback must NOT have been used
+        loader.best_code_for_family.assert_not_called()
+
+    def test_whitelist_miss_triggers_family_fallback_after_prefix_fails(self) -> None:
+        """When prefix chain also fails (ISPVLookupError), family fallback is used."""
+        from src.salary_ispv import ISPVLookupError as _ISPVLookupError
+
         salary_data = _make_salary_data(isco_code="2512")
         loader = _make_mock_loader(salary_data)
-        # Simulate: "9999" not in whitelist, but family "it" has a best code "2512"
-        loader.known_codes.return_value = frozenset({"2512"})  # "9999" NOT in set
+        # "9999" not in whitelist
+        loader.known_codes.return_value = frozenset({"2512"})
+        # loader.lookup("9999") raises (no prefix match either)
+        loader.lookup.side_effect = _ISPVLookupError("no prefix match")
+        # Family fallback succeeds
         loader.best_code_for_family.return_value = "2512"
+        # Reset side_effect for the second lookup call (family fallback code)
+        lookup_call_count = 0
+
+        def lookup_side_effect(code: str) -> SalaryData:
+            nonlocal lookup_call_count
+            lookup_call_count += 1
+            if lookup_call_count == 1:
+                raise _ISPVLookupError("no prefix match for 9999")
+            return salary_data
+
+        loader.lookup.side_effect = lookup_side_effect
 
         resume = _make_resume_with_isco(isco_code="9999", occupation_family="it")
         estimator = SalaryEstimator(ispv_loader=loader)
 
         result = estimator.estimate(resume, _make_score(70.0))
 
-        # Must not raise — should succeed via family fallback
         assert result.currency == "CZK"
         assert result.low > 0
-        # best_code_for_family must have been called with "it"
         loader.best_code_for_family.assert_called_once_with("it")
 
-    def test_whitelist_miss_no_family_raises(self) -> None:
-        """When isco_code not in whitelist and occupation_family is None → ISPVLookupError."""
-        loader = _make_mock_loader(_make_salary_data())
-        loader.known_codes.return_value = frozenset({"2512"})  # "9999" NOT in set
+    def test_whitelist_miss_no_family_raises_after_prefix_fails(self) -> None:
+        """prefix chain fails + no occupation_family → ISPVLookupError."""
+        from src.salary_ispv import ISPVLookupError as _ISPVLookupError
 
-        # No occupation_family on the experience
+        loader = _make_mock_loader(_make_salary_data())
+        loader.known_codes.return_value = frozenset({"2512"})
+        loader.lookup.side_effect = _ISPVLookupError("no prefix match")
+
         resume = _make_resume_with_isco(isco_code="9999", occupation_family=None)
         estimator = SalaryEstimator(ispv_loader=loader)
 
         with pytest.raises(ISPVLookupError, match="occupation_family"):
             estimator.estimate(resume, _make_score(70.0))
 
-    def test_whitelist_miss_no_family_data_raises(self) -> None:
-        """When isco_code not in whitelist and best_code_for_family returns None → ISPVLookupError."""
+    def test_whitelist_miss_no_family_data_raises_after_prefix_fails(self) -> None:
+        """prefix chain fails + best_code_for_family returns None → ISPVLookupError."""
+        from src.salary_ispv import ISPVLookupError as _ISPVLookupError
+
         loader = _make_mock_loader(_make_salary_data())
-        loader.known_codes.return_value = frozenset({"2512"})  # "9999" NOT in set
-        loader.best_code_for_family.return_value = None  # no family data available
+        loader.known_codes.return_value = frozenset({"2512"})
+        loader.lookup.side_effect = _ISPVLookupError("no prefix match")
+        loader.best_code_for_family.return_value = None
 
         resume = _make_resume_with_isco(isco_code="9999", occupation_family="it")
         estimator = SalaryEstimator(ispv_loader=loader)
 
         with pytest.raises(ISPVLookupError, match="occupation_family"):
             estimator.estimate(resume, _make_score(70.0))
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: Location substring bug — "most" must not match "mostly remote"
+# ---------------------------------------------------------------------------
+
+
+class TestLocationSubstringBug:
+    """Fix 3: word-boundary match must prevent 'most' key from matching
+    'mostly remote', 'almost anything', or 'postmodern'.
+    """
+
+    def test_most_city_matches_exactly(self) -> None:
+        """Location 'Most' (CZ city) must get the Most multiplier (×0.78)."""
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+        score = _make_score(70.0)
+
+        result_none = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location=None), score
+        )
+        result_most = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location="Most"), score
+        )
+
+        # Most multiplier is 0.78 — should be lower than national baseline
+        assert result_most.mid < result_none.mid, (
+            f"Most (city) mid ({result_most.mid}) should be < national ({result_none.mid})"
+        )
+        ratio = result_most.mid / result_none.mid
+        assert 0.73 <= ratio <= 0.83, f"Most multiplier ratio out of range: {ratio:.3f}"
+
+    def test_mostly_remote_does_not_get_most_multiplier(self) -> None:
+        """Location 'mostly remote' must NOT get the Most regional multiplier."""
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+        score = _make_score(70.0)
+
+        result_none = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location=None), score
+        )
+        result_mostly = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location="mostly remote"), score
+        )
+
+        # "mostly remote" has no CZ-city keyword → should get default ×1.0
+        assert result_mostly.mid == result_none.mid, (
+            f"'mostly remote' must not trigger Most multiplier — "
+            f"got mid={result_mostly.mid} vs baseline={result_none.mid}"
+        )
+
+    def test_almost_does_not_get_most_multiplier(self) -> None:
+        """Location 'almost Brno' must NOT get the Most multiplier.
+
+        The substring 'most' appears inside 'almost' — this was the false-positive
+        before the word-boundary fix.
+        """
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+        score = _make_score(70.0)
+
+        result_none = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location=None), score
+        )
+        result_almost = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location="almost Brno"), score
+        )
+
+        # "almost Brno" should match Brno multiplier (×1.0), not Most (×0.78)
+        assert result_almost.mid == result_none.mid, (
+            f"'almost Brno' must not trigger Most multiplier — "
+            f"got mid={result_almost.mid} vs baseline={result_none.mid}"
+        )
+
+    def test_postmodern_location_does_not_get_most_multiplier(self) -> None:
+        """'Postmodern Office, Praha' must not trigger Most multiplier."""
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+        score = _make_score(70.0)
+
+        result_none = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location=None), score
+        )
+        result_postmodern = estimator.estimate(
+            _make_resume_with_isco(isco_code="2512", location="Postmodern Office, Praha"), score
+        )
+
+        # Should match Praha (×1.15), not Most (×0.78)
+        assert result_postmodern.mid > result_none.mid, (
+            "Praha should give uplift, not Most discount"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2,9 +2,9 @@
 
 Use:
     from src.logging_config import configure_logging, bind_run_id
-    configure_logging()
+    configure_logging()           # call once at startup (idempotent)
     log = bind_run_id(run_id)
-    log.info("pipeline_start", file=str(path))
+    log.info("pipeline_start")
 """
 
 from __future__ import annotations
@@ -14,9 +14,21 @@ import sys
 
 import structlog
 
+# Guards against reconfiguring structlog on every request when configure_logging()
+# was inadvertently left inside a hot path. After the first call this becomes a
+# no-op so repeated calls in tests or retried code paths have no effect.
+_configured: bool = False
+
 
 def configure_logging(level: str = "INFO") -> None:
-    """Configure stdlib logging + structlog to emit JSON to stderr."""
+    """Configure stdlib logging + structlog to emit JSON to stderr.
+
+    Idempotent: subsequent calls return immediately without reconfiguring.
+    Intended to be called once from the application lifespan, not per-request.
+    """
+    global _configured
+    if _configured:
+        return
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stderr,
@@ -35,6 +47,7 @@ def configure_logging(level: str = "INFO") -> None:
         logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         cache_logger_on_first_use=True,
     )
+    _configured = True
 
 
 def bind_run_id(run_id: str) -> structlog.stdlib.BoundLogger:
