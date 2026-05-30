@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zásady ochrany osobních údajů — Job Fit Estimator</title>
+  <meta name="description" content="Informace o zpracování osobních údajů při použití nástroje Job Fit Estimator." />
+  <meta name="robots" content="noindex" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Hanken+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #fbfaf8;
+      --surface:     #ffffff;
+      --ink:         #1a1613;
+      --ink-2:       #3a332d;
+      --muted:       #6b645c;
+      --hairline:    #e7e0d6;
+      --hairline-2:  #f0ebe3;
+      --emerald:     #0e7c66;
+      --emerald-dim: #0a6353;
+      --emerald-bg:  #e8f5f1;
+      --radius-sm:   8px;
+      --radius:      12px;
+      --radius-lg:   20px;
+      --shadow-sm:   0 1px 3px rgba(26,22,19,.06), 0 1px 2px rgba(26,22,19,.04);
+      --font-display:'Fraunces', Georgia, serif;
+      --font-body:   'Hanken Grotesk', system-ui, sans-serif;
+      --transition:  0.18s ease;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    :focus { outline: none; }
+    :focus-visible {
+      outline: 2px solid var(--emerald);
+      outline-offset: 3px;
+      border-radius: 4px;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────── */
+    .site-header {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 28px 20px;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .wordmark {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+      text-decoration: none;
+    }
+    .wordmark span { color: var(--emerald); }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+    .back-link:hover { color: var(--ink); }
+    .back-link svg { flex-shrink: 0; }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 20px 80px;
+    }
+
+    .content {
+      width: 100%;
+      max-width: 680px;
+      padding-top: 48px;
+    }
+
+    /* ── Page title ───────────────────────────────────────────────────── */
+    .page-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--emerald-bg);
+      border-radius: 100px;
+      color: var(--emerald-dim);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+
+    .page-eyebrow::before {
+      content: '';
+      width: 6px; height: 6px;
+      background: var(--emerald);
+      border-radius: 50%;
+    }
+
+    h1 {
+      font-family: var(--font-display);
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--ink);
+      margin-bottom: 12px;
+    }
+
+    .page-lead {
+      font-size: 1rem;
+      color: var(--muted);
+      line-height: 1.65;
+      margin-bottom: 48px;
+      max-width: 540px;
+    }
+
+    /* ── Sections ─────────────────────────────────────────────────────── */
+    .policy-section {
+      margin-bottom: 40px;
+    }
+
+    .policy-section + .policy-section {
+      border-top: 1px solid var(--hairline);
+      padding-top: 40px;
+    }
+
+    h2 {
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--ink);
+      margin-bottom: 14px;
+      line-height: 1.3;
+    }
+
+    p {
+      font-size: 0.94rem;
+      color: var(--ink-2);
+      line-height: 1.75;
+      margin-bottom: 12px;
+    }
+
+    p:last-child { margin-bottom: 0; }
+
+    ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    ul li {
+      font-size: 0.94rem;
+      color: var(--ink-2);
+      line-height: 1.65;
+      padding-left: 18px;
+      position: relative;
+    }
+
+    ul li::before {
+      content: '—';
+      position: absolute;
+      left: 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* ── Highlight box — for key facts ───────────────────────────────── */
+    .fact-box {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 16px 18px;
+      background: var(--emerald-bg);
+      border-radius: var(--radius-sm);
+      margin-bottom: 16px;
+    }
+
+    .fact-box svg {
+      flex-shrink: 0;
+      margin-top: 2px;
+      color: var(--emerald-dim);
+    }
+
+    .fact-box-text {
+      font-size: 0.9rem;
+      color: var(--emerald-dim);
+      line-height: 1.6;
+    }
+
+    .fact-box-text strong {
+      font-weight: 600;
+      color: var(--emerald-dim);
+    }
+
+    /* ── Placeholder highlight ────────────────────────────────────────── */
+    .placeholder {
+      background: #fff3cd;
+      color: #7a5c00;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      font-style: normal;
+      white-space: nowrap;
+    }
+
+    /* ── External link ────────────────────────────────────────────────── */
+    a {
+      color: var(--emerald);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-thickness: 1px;
+      transition: color var(--transition);
+    }
+    a:hover { color: var(--emerald-dim); }
+
+    /* ── Footer ───────────────────────────────────────────────────────── */
+    .site-footer {
+      border-top: 1px solid var(--hairline);
+      padding: 28px 20px;
+      text-align: center;
+    }
+
+    .footer-inner {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .footer-meta {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .footer-meta a {
+      color: var(--muted);
+      text-decoration-color: var(--hairline);
+    }
+    .footer-meta a:hover { color: var(--ink); }
+
+    /* ── Responsive ───────────────────────────────────────────────────── */
+    @media (max-width: 480px) {
+      .content { padding-top: 32px; }
+      h1 { font-size: 1.7rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="site-header">
+      <a href="/" class="wordmark">Job Fit<span>.</span></a>
+      <a href="/" class="back-link" aria-label="Zpět na hlavní stránku">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Zpět
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <div class="content">
+
+      <div class="page-eyebrow">GDPR · Ochrana osobních údajů</div>
+
+      <h1>Zásady ochrany<br>osobních údajů</h1>
+
+      <p class="page-lead">
+        Tento nástroj slouží k&nbsp;orientačnímu odhadu mzdy a&nbsp;seniority na&nbsp;základě nahraného CV. Níže najdete srozumitelný přehled toho, jaká data zpracováváme, proč a&nbsp;jak.
+      </p>
+
+      <!-- 1. Správce -->
+      <section class="policy-section" id="spravce">
+        <h2>1. Kdo je správce osobních údajů</h2>
+        <p>
+          Správcem osobních údajů je <em class="placeholder">[SPRÁVCE – doplnit jméno/firmu, IČO, sídlo]</em>.
+          V&nbsp;případě dotazů nebo uplatnění práv se obraťte na&nbsp;<em class="placeholder">[KONTAKTNÍ E-MAIL – doplnit]</em>.
+        </p>
+      </section>
+
+      <!-- 2. Jaká data -->
+      <section class="policy-section" id="data">
+        <h2>2. Jaká data zpracováváme</h2>
+
+        <div class="fact-box">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 1.5L2 4.5v5c0 3.2 2.4 6.2 6 6.9 3.6-.7 6-3.7 6-6.9v-5L8 1.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M5.5 8l2 2 3-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="fact-box-text"><strong>CV neukládáme.</strong> Zpracuje se, výsledek se vrátí, soubor se smaže — do databáze se nedostane nic.</span>
+        </div>
+
+        <p>
+          Při použití nástroje nahráváte soubor CV (formát PDF nebo DOCX). Obsah CV může obsahovat osobní údaje — jméno, kontaktní informace, pracovní historii, vzdělání a&nbsp;další informace, které jste se rozhodli uvést.
+        </p>
+        <p>
+          Tento soubor zpracováváme výhradně za&nbsp;účelem analýzy: text se načte do&nbsp;paměti serveru a&nbsp;zapíše do&nbsp;krátkodobého dočasného souboru, který je ihned po&nbsp;dokončení analýzy nenávratně smazán. CV se nikam neukládá, neloguje se název souboru ani žádný identifikátor.
+        </p>
+        <p>
+          Ukládáme pouze anonymizovaný záznam o&nbsp;nákladech (počet tokenů), bez jakékoli vazby na&nbsp;obsah CV nebo identitu uživatele.
+        </p>
+      </section>
+
+      <!-- 3. Účel a právní základ -->
+      <section class="policy-section" id="ucel">
+        <h2>3. Účel zpracování a&nbsp;právní základ</h2>
+        <ul>
+          <li>
+            <strong>Účel:</strong> poskytnutí orientačního odhadu mzdy a&nbsp;seniority na&nbsp;základě obsahu CV, na&nbsp;výslovnou žádost uživatele.
+          </li>
+          <li>
+            <strong>Právní základ:</strong> souhlas a&nbsp;plnění smlouvy (čl.&nbsp;6 odst.&nbsp;1 písm.&nbsp;a a&nbsp;b nařízení GDPR) — zpracování probíhá pouze tehdy, kdy uživatel aktivně nahraje CV a&nbsp;spustí analýzu.
+          </li>
+        </ul>
+        <p>
+          Zpracování trvá po&nbsp;dobu nezbytnou k&nbsp;analýze (typicky desítky sekund). Po&nbsp;vrácení výsledku žádná osobní data na&nbsp;serveru nezůstávají.
+        </p>
+      </section>
+
+      <!-- 4. Třetí strany — OpenAI -->
+      <section class="policy-section" id="tretistrana">
+        <h2>4. Třetí strany — předání dat do&nbsp;OpenAI</h2>
+        <p>
+          Za&nbsp;účelem analýzy odesíláme text CV ke&nbsp;zpracování do&nbsp;<strong>OpenAI</strong> prostřednictvím jejich API. OpenAI v&nbsp;tomto případě vystupuje jako zpracovatel osobních údajů.
+        </p>
+        <p>
+          Podle <a href="https://openai.com/policies/api-data-usage-policies" target="_blank" rel="noopener noreferrer">podmínek využití API OpenAI</a> se data odeslaná přes API <strong>nepoužívají k&nbsp;trénování modelů</strong>. OpenAI je zpracovává výhradně za&nbsp;účelem vyřízení požadavku.
+        </p>
+        <p>
+          Více o&nbsp;ochraně osobních údajů ze&nbsp;strany OpenAI najdete na&nbsp;<a href="https://openai.com/privacy" target="_blank" rel="noopener noreferrer">openai.com/privacy</a>.
+        </p>
+      </section>
+
+      <!-- 5. Cookies a sledování -->
+      <section class="policy-section" id="cookies">
+        <h2>5. Cookies a sledování</h2>
+        <p>
+          Nepoužíváme cookies, analytické nástroje ani žádné jiné sledovací technologie. Neprovádíme profilování uživatelů.
+        </p>
+      </section>
+
+      <!-- 6. Práva subjektů -->
+      <section class="policy-section" id="prava">
+        <h2>6. Vaše práva</h2>
+        <p>
+          Jako subjekt údajů máte právo na&nbsp;přístup k&nbsp;osobním údajům, jejich opravu, výmaz, omezení zpracování, přenositelnost a&nbsp;právo vznést námitku.
+        </p>
+        <p>
+          Protože CV ani žádné jiné osobní údaje po&nbsp;dokončení analýzy neuchováváme, není v&nbsp;praxi co mazat ani vydávat. Pokud máte přesto dotaz nebo pochybnost, napište na&nbsp;<em class="placeholder">[KONTAKTNÍ E-MAIL – doplnit]</em>.
+        </p>
+        <p>
+          Máte také právo podat stížnost u&nbsp;dozorového úřadu — v&nbsp;České republice je jím <a href="https://www.uoou.cz" target="_blank" rel="noopener noreferrer">Úřad pro ochranu osobních údajů (ÚOOÚ)</a>.
+        </p>
+      </section>
+
+      <!-- 7. Bezpečnost -->
+      <section class="policy-section" id="bezpecnost">
+        <h2>7. Bezpečnost zpracování</h2>
+        <p>
+          Komunikace mezi prohlížečem a&nbsp;serverem probíhá šifrovaně (HTTPS). Data CV existují na&nbsp;serveru pouze po&nbsp;dobu nezbytně nutnou pro analýzu a&nbsp;jsou poté bezpečně odstraněna. K&nbsp;datům nemají přístup třetí strany s&nbsp;výjimkou OpenAI, jak je popsáno výše.
+        </p>
+      </section>
+
+      <!-- 8. Orientační nástroj -->
+      <section class="policy-section" id="omezeni">
+        <h2>8. Povaha nástroje</h2>
+        <p>
+          Job Fit Estimator je <strong>orientační nástroj</strong>, nikoli závazná nabídka práce ani mzdový příslib. Odhady vycházejí z&nbsp;veřejně dostupných dat (ISPV) a&nbsp;analýzy obsahu CV pomocí AI. Výsledky slouží pouze pro informativní účely.
+        </p>
+      </section>
+
+      <!-- 9. Datum účinnosti -->
+      <section class="policy-section" id="platnost">
+        <h2>9. Platnost dokumentu</h2>
+        <p>
+          Tyto zásady jsou účinné od&nbsp;<strong>30.&nbsp;května&nbsp;2026</strong>. Vyhrazujeme si právo je aktualizovat; aktuální verze je vždy dostupná na&nbsp;této stránce.
+        </p>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p class="footer-meta">
+        Orientační odhad, ne záruka — vychází z&nbsp;veřejných dat ISPV a&nbsp;analýzy CV.
+        &nbsp;·&nbsp;
+        <a href="/">Zpět na hlavní stránku</a>
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

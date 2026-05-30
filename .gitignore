@@ -21,8 +21,8 @@ tests/fixtures/*.docx
 # scripts/generate_fixtures.py. Must be tracked for reproducible eval.
 !tests/fixtures/cv_real_world.pdf
 *.html
-# Exception: the public web frontend is a real source file, not a build artifact.
-!web/index.html
+# Exception: the public web frontend files are real source, not build artifacts.
+!web/*.html
 .python-version
 dist/
 *.egg-info/
