@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.estimator import SalaryEstimator, _score_to_seniority
+from src.estimator import SalaryEstimator, _score_to_seniority, infer_salary_seniority
 from src.salary_ispv import ISPVLookupError
 from src.schemas import (
     Experience,
@@ -66,8 +66,13 @@ def _make_resume_with_isco(
     location: str | None = None,
     has_management: bool = False,
     occupation_family: str | None = "it",
+    seniority_level: str | None = "senior",
 ) -> Resume:
-    """Build a minimal Resume with one Experience entry."""
+    """Build a minimal Resume with one Experience entry.
+
+    seniority_level defaults to "senior" to match the original fixture behavior.
+    Pass seniority_level=None to test heuristic inference paths.
+    """
     exp = Experience(
         role_title="Software Developer",
         isco_code=isco_code,
@@ -75,7 +80,7 @@ def _make_resume_with_isco(
         company="Test Corp",
         start_year=2018,
         end_year=2024,
-        seniority_level="senior",
+        seniority_level=seniority_level,  # type: ignore[arg-type]
         is_management=has_management,
     )
     return Resume(
@@ -193,34 +198,47 @@ class TestSalaryEstimatorHappyPath:
         assert result.low >= 85_000, f"Senior low should be >= 85k, got {result.low}"
         assert result.high <= 140_000, f"Senior high should be <= 140k, got {result.high}"
 
-    def test_junior_score_uses_junior_band(self) -> None:
-        """Junior score → junior band applied (lower values than senior)."""
+    def test_junior_role_uses_junior_band(self) -> None:
+        """Junior role title → junior band applied (lower values than senior role title).
+
+        Band is driven by role seniority (seniority_level on Experience), not composite score.
+        Both resumes use the same composite score — only the role title differs.
+        """
         salary_data = _make_salary_data()
         loader = _make_mock_loader(salary_data)
         estimator = SalaryEstimator(ispv_loader=loader)
 
-        resume = _make_resume_with_isco(isco_code="2512", location=None)
-        score_junior = _make_score(20.0)
-        score_senior = _make_score(70.0)
+        resume_junior = _make_resume_with_isco(
+            isco_code="2512", location=None, seniority_level="junior"
+        )
+        resume_senior = _make_resume_with_isco(
+            isco_code="2512", location=None, seniority_level="senior"
+        )
+        # Same composite score for both — band must come from role title, not score
+        score = _make_score(70.0)
 
-        result_junior = estimator.estimate(resume, score_junior)
-        result_senior = estimator.estimate(resume, score_senior)
+        result_junior = estimator.estimate(resume_junior, score)
+        result_senior = estimator.estimate(resume_senior, score)
 
         assert result_junior.mid < result_senior.mid, (
-            f"Junior mid ({result_junior.mid}) should be lower than senior mid ({result_senior.mid})"
+            f"Junior role mid ({result_junior.mid}) should be lower than senior role mid ({result_senior.mid})"
         )
 
     def test_result_contains_required_assumptions(self) -> None:
-        """SalaryEstimate must contain seniority, ISCO, location, management, dataset fields."""
+        """SalaryEstimate must contain salary band, composite score note, ISCO, dataset fields."""
         salary_data = _make_salary_data()
         loader = _make_mock_loader(salary_data)
         estimator = SalaryEstimator(ispv_loader=loader)
 
+        # _make_resume_with_isco sets seniority_level="senior" on the experience
         resume = _make_resume_with_isco(isco_code="2512")
         result = estimator.estimate(resume, _make_score(70.0))
 
         assumption_text = " | ".join(result.assumptions)
-        assert "senior" in assumption_text.lower() or "Seniority" in assumption_text
+        # Salary band from role-grounded signal
+        assert "Salary band:" in assumption_text or "senior" in assumption_text.lower()
+        # Composite score shown as display-only note
+        assert "Composite score" in assumption_text or "display only" in assumption_text
         assert "2512" in assumption_text
         assert "ISPV" in assumption_text or "ispv" in assumption_text.lower()
 
@@ -392,19 +410,41 @@ class TestManagementMultiplier:
         absorb the management upside; stacking ×1.10 on top double-counts and
         overshoots reality. Regression for the eval golden-set principal CV that
         produced 691 k CZK before the fix.
+
+        Band is now driven by role seniority, not composite score — must use an
+        experience with seniority_level='lead' to land in the lead band.
         """
         salary_data = _make_salary_data()
         loader = _make_mock_loader(salary_data)
         estimator = SalaryEstimator(ispv_loader=loader)
-        # score 85 → lead band per _score_to_seniority
-        lead_score = _make_score(85.0)
 
-        result_lead_no_mgmt = estimator.estimate(
-            _make_resume_with_isco(isco_code="2512", has_management=False), lead_score
+        # Build a resume with an explicit lead seniority_level so role-seniority → lead
+        lead_exp = Experience(
+            role_title="Tech Lead",
+            isco_code="2512",
+            occupation_family="it",
+            company="LeadCorp",
+            start_year=2015,
+            end_year=None,
+            seniority_level="lead",
+            is_management=False,
         )
-        result_lead_with_mgmt = estimator.estimate(
-            _make_resume_with_isco(isco_code="2512", has_management=True), lead_score
+        lead_resume_no_mgmt = Resume(
+            full_name="Lead User",
+            location=None,
+            experiences=[lead_exp],
+            raw_text_length=500,
         )
+        lead_exp_mgmt = lead_exp.model_copy(update={"is_management": True})
+        lead_resume_with_mgmt = Resume(
+            full_name="Lead Manager User",
+            location=None,
+            experiences=[lead_exp_mgmt],
+            raw_text_length=500,
+        )
+
+        result_lead_no_mgmt = estimator.estimate(lead_resume_no_mgmt, _make_score(85.0))
+        result_lead_with_mgmt = estimator.estimate(lead_resume_with_mgmt, _make_score(85.0))
 
         assert result_lead_with_mgmt.mid == result_lead_no_mgmt.mid, (
             "Lead band must NOT add management multiplier — D9×1.20 already absorbs it"
@@ -413,19 +453,39 @@ class TestManagementMultiplier:
     def test_management_multiplier_skipped_for_principal_band(self) -> None:
         """Same as lead — principal band uses D9 × 1.30/1.50/1.75; mgmt stacking
         would push estimates well past any plausible CZ market level.
+
+        Band is driven by role seniority — use explicit seniority_level='principal'.
         """
         salary_data = _make_salary_data()
         loader = _make_mock_loader(salary_data)
         estimator = SalaryEstimator(ispv_loader=loader)
-        # score 95 → principal band
-        principal_score = _make_score(95.0)
 
-        result_no_mgmt = estimator.estimate(
-            _make_resume_with_isco(isco_code="2512", has_management=False), principal_score
+        principal_exp = Experience(
+            role_title="Principal Engineer",
+            isco_code="2512",
+            occupation_family="it",
+            company="BigCorp",
+            start_year=2010,
+            end_year=None,
+            seniority_level="principal",
+            is_management=False,
         )
-        result_with_mgmt = estimator.estimate(
-            _make_resume_with_isco(isco_code="2512", has_management=True), principal_score
+        principal_resume_no_mgmt = Resume(
+            full_name="Principal User",
+            location=None,
+            experiences=[principal_exp],
+            raw_text_length=500,
         )
+        principal_exp_mgmt = principal_exp.model_copy(update={"is_management": True})
+        principal_resume_with_mgmt = Resume(
+            full_name="Principal Manager",
+            location=None,
+            experiences=[principal_exp_mgmt],
+            raw_text_length=500,
+        )
+
+        result_no_mgmt = estimator.estimate(principal_resume_no_mgmt, _make_score(95.0))
+        result_with_mgmt = estimator.estimate(principal_resume_with_mgmt, _make_score(95.0))
 
         assert result_with_mgmt.high == result_no_mgmt.high, (
             "Principal band must NOT add management multiplier — D9×1.75 already absorbs it"
@@ -776,6 +836,245 @@ class TestNonCZLocationGuard:
             resume = _make_resume_with_isco(isco_code="2512", location=city)
             result = estimator.estimate(resume, _make_score(70.0))
             assert result.currency == "CZK", f"{city} must not be classified as non-CZ"
+
+
+# ---------------------------------------------------------------------------
+# infer_salary_seniority — role-grounded band logic
+# ---------------------------------------------------------------------------
+
+
+class TestInferSalarySeniority:
+    """Regression tests for the salary-band-decoupling fix.
+
+    Root cause: salary band was derived from composite score.total, which blends
+    education + skills + experience. Genuine seniors (score ~82) crossed the 80
+    threshold and landed in lead band, inflating salary ~50%.
+
+    Fix: salary band is now driven by parsed seniority_level + years + management.
+    Education and skill breadth must NOT influence the band.
+    """
+
+    def test_composite_high_but_role_senior_stays_in_senior_band(self) -> None:
+        """A CV with composite score ~82 (old → lead) but explicit senior title stays senior.
+
+        This is the primary regression case from the eval:
+        cv_it_developer.txt scored 81.8, landed in lead band, predicted 237k–300k.
+        True salary was 130k–165k (senior band).
+        """
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+
+        # Explicit seniority_level="senior" on the primary role
+        resume = _make_resume_with_isco(isco_code="2512", seniority_level="senior")  # type: ignore[call-arg]
+        # Composite score 82 would map to "lead" via _score_to_seniority
+        high_composite_score = _make_score(82.0)
+
+        result = estimator.estimate(resume, high_composite_score)
+
+        # Must be in senior band (90k–130k base), NOT lead band (130k–165k base)
+        assert result.mid <= 130_000, (
+            f"Senior role with composite 82 must NOT land in lead band. "
+            f"Got mid={result.mid}, expected <= 130000 (senior band)"
+        )
+        # Reasoning must reference senior, not lead
+        assert "senior" in result.reasoning.lower()
+        # Composite note must be present in assumptions
+        composite_note = next(
+            (a for a in result.assumptions if "display only" in a or "Composite" in a), None
+        )
+        assert composite_note is not None, (
+            "Composite score display-only note must be in assumptions"
+        )
+
+    def test_explicit_lead_role_gets_lead_band(self) -> None:
+        """A CV with explicit seniority_level='lead' must land in lead band."""
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+
+        lead_exp = Experience(
+            role_title="Engineering Lead",
+            isco_code="2512",
+            occupation_family="it",
+            company="TechCorp",
+            start_year=2016,
+            end_year=None,
+            seniority_level="lead",
+            is_management=False,
+        )
+        resume = Resume(
+            full_name="Lead Candidate",
+            location=None,
+            experiences=[lead_exp],
+            raw_text_length=500,
+        )
+        result = estimator.estimate(resume, _make_score(75.0))
+
+        # Lead band base: 130k–165k
+        assert result.mid >= 130_000, f"Explicit lead role must get lead band. Got mid={result.mid}"
+        assert "lead" in result.reasoning.lower()
+
+    def test_manager_with_no_explicit_level_and_long_career_gets_lead(self) -> None:
+        """is_management=True + 9+ years, no explicit seniority_level → lead band (inferred)."""
+        mgmt_exp = Experience(
+            role_title="Engineering Manager",
+            isco_code="2512",
+            occupation_family="it",
+            company="MgmtCorp",
+            start_year=2015,  # ~11 years of experience
+            end_year=None,
+            seniority_level=None,  # no explicit level
+            is_management=True,
+        )
+        resume = Resume(
+            full_name="Manager User",
+            location=None,
+            experiences=[mgmt_exp],
+            raw_text_length=500,
+        )
+        band, inferred = infer_salary_seniority(resume)
+        assert band == "lead", f"Manager with 11 years must infer lead, got {band!r}"
+        assert inferred, "Must be flagged as inferred (no explicit title)"
+
+    def test_education_cannot_lift_to_lead_band(self) -> None:
+        """PhD + many skills must NOT push a senior role into lead band.
+
+        This verifies the root cause is fixed: education/skills are in composite score
+        but must not influence salary band.
+        """
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+
+        # Explicit senior role
+        senior_resume = _make_resume_with_isco(isco_code="2512", seniority_level="senior")  # type: ignore[call-arg]
+        # Composite score well into lead territory (82+)
+        high_score = _make_score(90.0)
+
+        result = estimator.estimate(senior_resume, high_score)
+
+        # Must stay in senior band despite composite 90
+        assert result.mid <= 130_000, (
+            f"Education/skills (composite 90) must NOT lift senior role to lead band. "
+            f"Got mid={result.mid}"
+        )
+
+    def test_no_seniority_level_short_career_infers_junior(self) -> None:
+        """No explicit seniority_level + 1 year → junior band inferred."""
+        exp = Experience(
+            role_title="Developer",
+            isco_code="2512",
+            occupation_family="it",
+            company="StartupCorp",
+            start_year=2025,
+            end_year=None,
+            seniority_level=None,
+            is_management=False,
+        )
+        resume = Resume(full_name="Junior", location=None, experiences=[exp], raw_text_length=100)
+        band, inferred = infer_salary_seniority(resume)
+        assert band == "junior"
+        assert inferred
+
+    def test_no_seniority_level_medium_career_infers_medior(self) -> None:
+        """No explicit level + 3 years → medior band inferred."""
+        exp = Experience(
+            role_title="Developer",
+            isco_code="2512",
+            occupation_family="it",
+            company="MidCorp",
+            start_year=2023,
+            end_year=None,
+            seniority_level=None,
+            is_management=False,
+        )
+        resume = Resume(full_name="Medior", location=None, experiences=[exp], raw_text_length=100)
+        band, inferred = infer_salary_seniority(resume)
+        assert band == "medior"
+        assert inferred
+
+    def test_no_seniority_level_long_career_no_mgmt_infers_senior(self) -> None:
+        """No explicit level + 7 years + no management → senior (conservative, not lead)."""
+        exp = Experience(
+            role_title="Developer",
+            isco_code="2512",
+            occupation_family="it",
+            company="OldCorp",
+            start_year=2019,
+            end_year=None,
+            seniority_level=None,
+            is_management=False,
+        )
+        resume = Resume(full_name="Senior", location=None, experiences=[exp], raw_text_length=100)
+        band, inferred = infer_salary_seniority(resume)
+        assert band == "senior"
+        assert inferred
+
+    def test_medior_title_with_long_career_lifts_to_senior(self) -> None:
+        """'medior' is the parser's default for unlabeled titles — years must lift it.
+
+        A 10+ year developer whose title parsed as 'medior' (no explicit 'Senior'
+        word) should land in the SENIOR band, not stay stuck at medior.
+        """
+        exp = Experience(
+            role_title="Ruby on Rails Developer",
+            isco_code="2512",
+            occupation_family="it",
+            company="WebCorp",
+            start_year=2014,
+            end_year=None,
+            seniority_level="medior",
+            is_management=False,
+        )
+        resume = Resume(full_name="Tenured", location=None, experiences=[exp], raw_text_length=100)
+        band, inferred = infer_salary_seniority(resume)
+        assert band == "senior", f"medior title + 10y must lift to senior, got {band}"
+        assert inferred  # heuristic lift → low-confidence warning
+
+    def test_medior_title_with_short_career_stays_medior(self) -> None:
+        """A genuinely short-tenure medior is trusted, not lifted."""
+        exp = Experience(
+            role_title="Developer",
+            isco_code="2512",
+            occupation_family="it",
+            company="WebCorp",
+            start_year=2023,
+            end_year=None,
+            seniority_level="medior",
+            is_management=False,
+        )
+        resume = Resume(full_name="Early", location=None, experiences=[exp], raw_text_length=100)
+        band, inferred = infer_salary_seniority(resume)
+        assert band == "medior", f"medior title + short career stays medior, got {band}"
+        assert not inferred  # trusted title, no lift
+
+    def test_inferred_seniority_surfaces_warning_in_assumptions(self) -> None:
+        """When seniority is inferred (no explicit title), assumption must carry LOW CONFIDENCE."""
+        salary_data = _make_salary_data()
+        loader = _make_mock_loader(salary_data)
+        estimator = SalaryEstimator(ispv_loader=loader)
+
+        # Experience without explicit seniority_level
+        exp = Experience(
+            role_title="Developer",
+            isco_code="2512",
+            occupation_family="it",
+            company="NoCorp",
+            start_year=2020,
+            end_year=None,
+            seniority_level=None,
+            is_management=False,
+        )
+        resume = Resume(
+            full_name="Inferred User", location=None, experiences=[exp], raw_text_length=100
+        )
+        result = estimator.estimate(resume, _make_score(70.0))
+
+        first_assumption = result.assumptions[0]
+        assert "LOW CONFIDENCE" in first_assumption or "inferred" in first_assumption.lower(), (
+            f"Inferred band must flag low confidence in assumptions. Got: {first_assumption!r}"
+        )
 
 
 class TestExperienceRecencySelection:

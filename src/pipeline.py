@@ -18,9 +18,10 @@ from typing import Any
 from src.config import settings
 from src.cost_tracker import (
     CostRecord,
-    check_budget,
+    _release_reservation,  # pyright: ignore[reportPrivateUsage]
     new_run_id,
     record_run,
+    reserve,
 )
 from src.estimator import SalaryEstimator
 from src.explainer import Explainer
@@ -137,11 +138,22 @@ class Pipeline:
         # estimate_run_cost_usd looks up parser+explainer pricing and adds a
         # 2.5× safety margin so the daily cap reflects realistic worst-case
         # spend across the configured models.
-        reservation = estimate_run_cost_usd(
+        #
+        # We use reserve() instead of the bare check_budget() to close the
+        # TOCTOU window: reserve() atomically claims the estimated budget slot
+        # so a second concurrent request sees this run's estimate immediately,
+        # rather than after the full pipeline completes (~10-60 s later).
+        # The reservation is always released in the try/finally below via
+        # _release_reservation(), and the actual CostRecord is written by
+        # _persist_cost_record (called on both success and failure paths).
+        # See cost_tracker module docstring for the full concurrency contract.
+        estimated_cost = estimate_run_cost_usd(
             parser_model=getattr(self._parser_llm, "model", "gpt-4o-mini"),
             explainer_model=getattr(self._explainer_llm, "model", "gpt-4o-mini"),
         )
-        check_budget(estimated_cost_usd=reservation)
+        # reserve() raises BudgetExceededError before any LLM work starts.
+        # If it raises, there is no reservation to clean up — let it propagate.
+        reserve(run_id, estimated_cost)
 
         wall_start = time.monotonic()
         meta: dict[str, Any] = {"steps": {}, "run_id": run_id}
@@ -151,8 +163,8 @@ class Pipeline:
             return self._run_inner(file_path, run_id, wall_start, meta)
         except Exception as exc:
             # Whatever raises (PipelineInfrastructureError, ISPVLookupError,
-            # BudgetExceededError, etc.), persist whatever cost we accumulated
-            # before the failure so DAILY_API_BUDGET_USD reflects real spend.
+            # etc.), persist whatever partial cost was accumulated so the daily
+            # budget log reflects real spend.
             run_error = type(exc).__name__
             self._persist_cost_record(
                 run_id=run_id,
@@ -163,6 +175,12 @@ class Pipeline:
                 run_error=run_error,
             )
             raise
+        finally:
+            # Always release the reservation so it does not permanently consume
+            # budget — whether the run succeeded, failed, or was cancelled.
+            # _persist_cost_record (called above on both paths) handles the JSONL
+            # write separately; _release_reservation only removes the in-memory slot.
+            _release_reservation(run_id)
 
     def _run_inner(
         self,

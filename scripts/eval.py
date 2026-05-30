@@ -1,13 +1,19 @@
-"""Eval harness for Job Fit Estimator pipeline.
+"""Labeled-eval / accuracy harness for the Job Fit Estimator pipeline.
 
-Runs pipeline on 5 synthetic fixtures and checks scores/salary against expected ranges.
-Supports --html flag for a screen-share-ready HTML report.
+Loads ground-truth labels from data/eval_labels.json, runs the pipeline on each
+labeled CV (both .pdf and .txt), computes accuracy metrics via src/eval_metrics.py,
+and prints a rich report. Optionally exports JSON / HTML.
 
 Usage:
-  python scripts/eval.py                           # eval on all fixtures
-  python scripts/eval.py --html report.html        # eval + HTML report
-  python scripts/eval.py --cv path/to/cv.pdf       # custom CV
-  python scripts/eval.py --cv cv.pdf --html out.html
+  uv run python scripts/eval.py                          # all labeled CVs
+  uv run python scripts/eval.py --limit 2               # first 2 entries (cost guard)
+  uv run python scripts/eval.py --only nurse            # entries whose cv path contains 'nurse'
+  uv run python scripts/eval.py --json out.json         # export predictions + metrics as JSON
+  uv run python scripts/eval.py --html out.html         # HTML report
+  uv run python scripts/eval.py --limit 2 --html r.html # combined
+
+NOTE: This script calls the OpenAI API. It is intentionally NOT run in the normal
+pytest suite — call it manually or as a nightly job.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -23,375 +30,748 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to sys.path so relative imports work when called as a script.
+_PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
 
+from src.cost_tracker import check_budget  # noqa: E402
+from src.eval_metrics import (  # noqa: E402
+    EvalResults,
+    Label,
+    Prediction,
+    SalaryLabel,
+    SalaryPrediction,
+    aggregate_metrics,
+    format_czk,
+    format_pct,
+)
 from src.pipeline import Pipeline  # noqa: E402
 from src.schemas import PipelineResult  # noqa: E402
 
-FIXTURES_DIR = Path("tests/fixtures")
+logger = logging.getLogger(__name__)
 
-# Expected ranges per fixture: score (min, max) and salary bounds
-EXPECTED: dict[str, dict[str, Any]] = {
-    "cv_junior.pdf": {
-        "score": (15, 50),
-        "salary_low_min": 35_000,
-        # Junior dev in Praha can hit ~83k high after region multiplier (1.15)
-        # against 2511/2512 Q1 ~70k — leave headroom for realistic stack.
-        "salary_high_max": 90_000,
-    },
-    "cv_medior.pdf": {
-        "score": (35, 70),
-        "salary_low_min": 55_000,
-        # Medior IT Praha realistically tops at ~125k once location and mgmt
-        # multipliers stack against 2512 mid (~95k).
-        "salary_high_max": 130_000,
-    },
-    "cv_senior.pdf": {
-        "score": (60, 92),
-        "salary_low_min": 90_000,
-        # Senior AI/ML in Praha as tech lead realistically tops at ~212k
-        # (110k × 1.15 location × 1.15 mgmt). Acknowledges realistic upper
-        # bound after single-counting AI premium, not test-range tuning.
-        "salary_high_max": 220_000,
-    },
-    "cv_principal.pdf": {
-        # IC-track Principal Engineer (no direct reports, mentor-only).
-        # Score ~82 → lead band per _score_to_seniority; band high = D9 × 1.35
-        # × Praha 1.15 lands around ~290k for 2512. Cap leaves modest headroom.
-        "score": (75, 100),
-        "salary_low_min": 120_000,
-        "salary_high_max": 310_000,
-    },
-    "cv_contractor.pdf": {
-        "score": (40, 90),
-        "salary_low_min": 75_000,
-        # Contractor with senior+ score and Praha location compounds to
-        # ~240k high — wider band reflects contractor premium.
-        "salary_high_max": 250_000,
-    },
-    "cv_real_world.pdf": {
-        "score": (40, 75),
-        "salary_low_min": 60_000,
-        # Wide ranges intentional — see README "Real-World Case Study".
-        # Real CV reveals 3 calibration limits (progression, education, regional).
-        # PASS = no crash + within plausibility, not strict accuracy.
-        "salary_high_max": 130_000,
-    },
-}
+_LABELS_PATH = _PROJECT_ROOT / "data" / "eval_labels.json"
+_FIXTURES_BASE = _PROJECT_ROOT
+
+# Score sentinel used when the pipeline fails and we still want a row in the table.
+_FAILED_SENTINEL = "ERROR"
 
 
-def check_result(name: str, result: PipelineResult, expected: dict[str, Any]) -> dict[str, bool]:
-    """Check result against expected ranges. Returns dict of passed/failed checks."""
-    checks: dict[str, bool] = {}
-
-    score_min, score_max = expected["score"]
-    checks["score_in_range"] = score_min <= result.score.total <= score_max
-
-    checks["salary_low_ok"] = result.salary.low >= expected["salary_low_min"]
-    checks["salary_high_ok"] = result.salary.high <= expected["salary_high_max"]
-    checks["has_3_recs"] = len(result.explanation.recommendations) == 3
-    checks["has_strengths"] = len(result.explanation.strengths) >= 1
-    checks["has_gaps"] = len(result.explanation.gaps) >= 1
-
-    return checks
+# ---------------------------------------------------------------------------
+# Label loading
+# ---------------------------------------------------------------------------
 
 
-def print_summary_row(
-    name: str,
-    result: PipelineResult,
-    checks: dict[str, bool],
+def _load_labels(path: Path) -> list[Label]:
+    """Load and parse eval_labels.json into Label objects.
+
+    Args:
+        path: Path to eval_labels.json.
+
+    Returns:
+        List of Label objects, one per entry.
+
+    Raises:
+        FileNotFoundError: If the labels file does not exist.
+        ValueError: If the JSON is malformed.
+    """
+    raw_list: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))
+    labels: list[Label] = []
+    for entry in raw_list:
+        isco = str(entry.get("isco_code", "TODO"))
+        seniority = str(entry.get("seniority", "TODO"))
+        salary_raw = entry.get("salary_czk_month")
+        salary: SalaryLabel | None = None
+        if salary_raw is not None:
+            salary = SalaryLabel.from_raw(salary_raw)
+
+        salary_source = str(entry.get("salary_source", ""))
+        is_real = isco == "TODO" or seniority == "TODO" or "TODO_real" in salary_source
+
+        labels.append(
+            Label(
+                cv_name=Path(str(entry["cv"])).name,
+                isco_code=isco,
+                seniority=seniority,
+                salary=salary,
+                is_real=is_real,
+            )
+        )
+    return labels
+
+
+# ---------------------------------------------------------------------------
+# Running the pipeline on a single CV
+# ---------------------------------------------------------------------------
+
+
+def _run_cv(
+    pipeline: Pipeline,
+    cv_path: Path,
+    label: Label,
     console: Console,
+) -> tuple[PipelineResult | None, Prediction]:
+    """Run the pipeline on one CV file, handling .txt bypass.
+
+    For .txt files the extractor does not support direct text input, so we read
+    the file and feed its content directly to the parser, bypassing PDF extraction.
+
+    Args:
+        pipeline: Initialized Pipeline instance.
+        cv_path: Absolute path to the CV file.
+        label: Ground-truth label for this CV (used only for display context).
+        console: Rich console for status messages.
+
+    Returns:
+        Tuple of (PipelineResult or None on failure, Prediction).
+    """
+    console.print(f"  Running: [bold]{cv_path.name}[/bold]", end="")
+
+    try:
+        if cv_path.suffix.lower() == ".txt":
+            # .txt files: read text directly, inject into the parse step.
+            result = _run_txt(pipeline, cv_path)
+        else:
+            result = pipeline.run(cv_path)
+
+        salary_pred: SalaryPrediction | None = None
+        if result.salary:
+            salary_pred = SalaryPrediction(
+                low=result.salary.low,
+                high=result.salary.high,
+                mid=result.salary.mid,
+            )
+
+        # Extract ISCO from the most recent experience that has one.
+        isco_pred: str | None = None
+        for exp in result.resume.experiences:
+            if exp.isco_code:
+                isco_pred = exp.isco_code
+                break
+
+        # Derive predicted seniority from the score band.
+        from src.estimator import _score_to_seniority  # type: ignore[reportPrivateUsage]
+
+        seniority_pred = _score_to_seniority(result.score.total)  # type: ignore[arg-type]
+
+        w_count = sum(1 for f in result.validation_flags if f.severity in ("warning", "error"))
+
+        pred = Prediction(
+            cv_name=cv_path.name,
+            isco_code=isco_pred,
+            seniority=seniority_pred,  # type: ignore[arg-type]
+            salary=salary_pred,
+            warnings_emitted=w_count,
+        )
+        console.print(" [green]OK[/green]")
+        return result, pred
+
+    except Exception as exc:
+        console.print(f" [red]FAIL: {exc}[/red]")
+        logger.exception("Pipeline failed for %s", cv_path.name)
+        pred = Prediction(
+            cv_name=cv_path.name,
+            isco_code=None,
+            seniority=None,
+            salary=None,
+        )
+        return None, pred
+
+
+def _run_txt(pipeline: Pipeline, cv_path: Path) -> PipelineResult:
+    """Run pipeline on a .txt CV by bypassing PDF extraction.
+
+    Reads the plain text directly and feeds it through the parser.
+    This avoids the UnsupportedFormatError that extract_text() raises for .txt.
+
+    Args:
+        pipeline: Initialized Pipeline instance.
+        cv_path: Path to the .txt CV file.
+
+    Returns:
+        PipelineResult as if the text had come from a PDF.
+
+    Raises:
+        Any exception that the pipeline internals raise (parse, score, etc.).
+    """
+    import time as _time
+    from datetime import UTC
+    from datetime import datetime as _datetime
+
+    from src.cost_tracker import CostRecord, new_run_id, record_run
+    from src.extractor import ExtractedDocument
+    from src.logging_config import bind_run_id
+    from src.schemas import PipelineResult
+
+    run_id = new_run_id()
+    bind_run_id(run_id)
+
+    # Budget guard — same reservation logic as Pipeline.run()
+    from src.llm_provider import estimate_run_cost_usd
+
+    reservation = estimate_run_cost_usd(
+        parser_model=getattr(pipeline._parser_llm, "model", "gpt-4o-mini"),
+        explainer_model=getattr(pipeline._explainer_llm, "model", "gpt-4o-mini"),
+    )
+    check_budget(estimated_cost_usd=reservation)
+
+    raw_text = cv_path.read_text(encoding="utf-8")
+    doc = ExtractedDocument(
+        text=raw_text,
+        source_format="pdf",  # sentinel — treated as digital text
+        extraction_method="pymupdf",
+        page_count=1,
+        char_count=len(raw_text),
+        is_scanned=False,
+    )
+
+    wall_start = _time.monotonic()
+    meta: dict[str, Any] = {"steps": {}, "run_id": run_id}
+
+    # ── Parse ────────────────────────────────────────────────────────────────
+    resume, parse_meta = pipeline.parser.parse(doc.text)
+    if parse_meta.get("error"):
+        raise RuntimeError(f"Parser failed: {parse_meta['error']}")
+    meta["steps"]["parse"] = {"status": "ok", "cost_usd": parse_meta.get("cost_usd", 0.0)}
+
+    # ── Validate ─────────────────────────────────────────────────────────────
+    from src.validator import compute_confidence
+
+    flags = pipeline.validator.validate(resume, doc.text)
+    meta["steps"]["validate"] = {"status": "ok", "flags": len(flags), "embed_cost_usd": 0.0}
+
+    # ── Score ─────────────────────────────────────────────────────────────────
+    from src.scorer import score_resume
+
+    score = score_resume(resume)
+    confidence_reduction = compute_confidence(flags)
+    score = score.model_copy(
+        update={"confidence": round(score.confidence * confidence_reduction, 3)}
+    )
+    meta["steps"]["score"] = {"status": "ok", "total": score.total}
+
+    # ── Estimate ─────────────────────────────────────────────────────────────
+    salary = pipeline.estimator.estimate(resume, score)
+    meta["steps"]["estimate"] = {"status": "ok"}
+
+    # ── Explain ──────────────────────────────────────────────────────────────
+    explanation, exp_meta = pipeline.explainer.explain(resume, score, salary)
+    meta["steps"]["explain"] = {"status": "ok", "cost_usd": exp_meta.get("cost_usd", 0.0)}
+
+    # ── Aggregate ────────────────────────────────────────────────────────────
+    parse_cost = float(meta["steps"]["parse"]["cost_usd"])
+    explain_cost = float(meta["steps"]["explain"]["cost_usd"])
+    total_cost = parse_cost + explain_cost
+    meta["total_cost_usd"] = total_cost
+    meta["total_duration_s"] = round(_time.monotonic() - wall_start, 2)
+    meta["parser_model"] = getattr(pipeline._parser_llm, "model", "unknown")
+    meta["explainer_model"] = getattr(pipeline._explainer_llm, "model", "unknown")
+    meta["model"] = meta["parser_model"]
+
+    cost_record = CostRecord(
+        run_id=run_id,
+        timestamp_utc=_datetime.now(UTC).isoformat(),
+        fixture_or_file=f"eval_txt{cv_path.suffix}",
+        total_cost_usd=total_cost,
+        parse_cost_usd=parse_cost,
+        explain_cost_usd=explain_cost,
+        embed_cost_usd=0.0,
+        duration_s=meta["total_duration_s"],
+        score_total=score.total,
+        error=None,
+    )
+    record_run(cost_record)
+
+    return PipelineResult(
+        resume=resume,
+        validation_flags=flags,
+        score=score,
+        salary=salary,
+        explanation=explanation,
+        meta=meta,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rich report helpers
+# ---------------------------------------------------------------------------
+
+
+def _print_per_cv_table(
+    console: Console,
+    run_data: list[tuple[Label, PipelineResult | None, Prediction]],
 ) -> None:
-    """Print a one-line summary for this fixture."""
-    passed = all(checks.values())
-    status = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-    failed_checks = [k for k, v in checks.items() if not v]
-    fail_info = f" ({', '.join(failed_checks)})" if failed_checks else ""
-    console.print(
-        f"  {status} {name}: score={result.score.total:.1f} "
-        f"salary={result.salary.low:,}–{result.salary.high:,} CZK" + fail_info
-    )
+    """Print a per-CV table: predicted vs true ISCO/seniority/salary + pass/fail.
 
-
-def print_full_result(result: PipelineResult, console: Console) -> None:
-    """Print detailed result for a single CV analysis."""
-    console.print(f"\n[bold]Candidate:[/bold] {result.resume.full_name or 'Unknown'}")
-    console.print(
-        f"[bold]Score:[/bold] {result.score.total:.1f}/100 (confidence: {result.score.confidence:.0%})"
-    )
-    console.print(f"[bold]Salary:[/bold] {result.salary.low:,}–{result.salary.high:,} CZK/month")
-
-    # Score breakdown
-    table = Table(title="Score Breakdown")
-    table.add_column("Component")
+    Args:
+        console: Rich console.
+        run_data: List of (label, result_or_None, prediction) tuples.
+    """
+    table = Table(title="Per-CV Predictions vs Ground Truth", show_lines=True)
+    table.add_column("CV", style="bold", max_width=22)
+    table.add_column("True ISCO", justify="center")
+    table.add_column("Pred ISCO", justify="center")
+    table.add_column("ISCO", justify="center", width=5)
+    table.add_column("True Sr.", justify="center")
+    table.add_column("Pred Sr.", justify="center")
+    table.add_column("Sr.", justify="center", width=5)
+    table.add_column("True Salary", justify="right")
+    table.add_column("Pred Salary", justify="right")
     table.add_column("Score", justify="right")
-    table.add_column("Weight", justify="right")
-    table.add_column("Reasoning")
-    for comp in result.score.components:
-        table.add_row(comp.name, f"{comp.score:.1f}", f"{comp.weight:.2f}", comp.reasoning[:60])
-    console.print(table)
+    table.add_column("Cost $", justify="right")
 
-    console.print(f"\n[bold]Summary:[/bold] {result.explanation.summary}")
-    console.print("\n[bold]Recommendations:[/bold]")
-    for i, rec in enumerate(result.explanation.recommendations, 1):
-        console.print(
-            f"  {i}. {rec.title} (+{rec.estimated_salary_impact_pct:.0f}%, {rec.timeframe_months}mo)"
+    for label, result, pred in run_data:
+        if result is None:
+            table.add_row(
+                label.cv_name,
+                label.isco_code,
+                "[red]ERR[/red]",
+                "[red]✗[/red]",
+                label.seniority,
+                "[red]ERR[/red]",
+                "[red]✗[/red]",
+                _fmt_salary_label(label),
+                "-",
+                "-",
+                "-",
+            )
+            continue
+
+        pred_isco = pred.isco_code or "?"
+        true_isco = label.isco_code
+        isco_ok = pred_isco == true_isco
+        isco_p3 = len(pred_isco) >= 3 and len(true_isco) >= 3 and pred_isco[:3] == true_isco[:3]
+        isco_mark = (
+            "[green]✓[/green]" if isco_ok else ("[yellow]~[/yellow]" if isco_p3 else "[red]✗[/red]")
+        )
+        if label.is_real:
+            isco_mark = "[dim]?[/dim]"
+            pred_isco_display = pred_isco
+            true_isco_display = f"[dim]{true_isco}[/dim]"
+        else:
+            pred_isco_display = (
+                f"[red]{pred_isco}[/red]" if not isco_ok else f"[green]{pred_isco}[/green]"
+            )
+            true_isco_display = true_isco
+
+        pred_sr = pred.seniority or "?"
+        true_sr = label.seniority
+        sr_ok = pred_sr == true_sr
+        from src.eval_metrics import SENIORITY_ORDER
+
+        pred_rank = SENIORITY_ORDER.get(pred_sr, -99)
+        true_rank = SENIORITY_ORDER.get(true_sr, -99)
+        sr_obo = abs(pred_rank - true_rank) <= 1
+        if label.is_real:
+            sr_mark = "[dim]?[/dim]"
+        else:
+            sr_mark = (
+                "[green]✓[/green]"
+                if sr_ok
+                else ("[yellow]±1[/yellow]" if sr_obo else "[red]✗[/red]")
+            )
+
+        pred_salary_str = (
+            f"{pred.salary.low:,}–{pred.salary.high:,}" if pred.salary else "[dim]n/a[/dim]"
+        )
+        score_str = f"{result.score.total:.1f}" if result else "-"
+        cost_str = f"{result.meta.get('total_cost_usd', 0):.4f}" if result else "-"
+
+        table.add_row(
+            label.cv_name,
+            true_isco_display,
+            pred_isco_display,
+            isco_mark,
+            true_sr,
+            pred_sr,
+            sr_mark,
+            _fmt_salary_label(label),
+            pred_salary_str,
+            score_str,
+            cost_str,
         )
 
+    console.print(table)
+
+
+def _fmt_salary_label(label: Label) -> str:
+    """Format the true salary label for display.
+
+    Args:
+        label: Ground-truth label.
+
+    Returns:
+        Formatted string, or 'TODO' / 'n/a' for incomplete labels.
+    """
+    if label.salary is None:
+        return "[dim]n/a[/dim]"
+    if label.salary.low == 0 and label.salary.high == 0:
+        return "[dim]TODO[/dim]"
+    if label.salary.low == label.salary.high:
+        return f"{label.salary.low:,}"
+    return f"{label.salary.low:,}–{label.salary.high:,}"
+
+
+def _print_aggregate(console: Console, metrics: EvalResults, total_cost: float) -> None:
+    """Print the aggregate metrics summary block.
+
+    Args:
+        console: Rich console.
+        metrics: Computed EvalResults.
+        total_cost: Total API cost in USD across all runs.
+    """
+    console.rule("[bold]Aggregate Metrics[/bold]")
+    console.print(f"  Labeled CVs: {metrics.n_labeled}/{metrics.n_total} (excluding TODO entries)")
+    console.print()
+
+    if metrics.n_labeled > 0:
+        console.print("[bold]ISCO accuracy[/bold]")
+        console.print(f"  Exact match:        {format_pct(metrics.isco_exact_rate)}")
+        console.print(f"  3-digit prefix:     {format_pct(metrics.isco_prefix3_rate)}")
+        if metrics.isco_mismatches:
+            console.print("  Mismatches:")
+            for mm in metrics.isco_mismatches:
+                prefix_note = " (prefix match)" if mm.prefix3_match else ""
+                console.print(
+                    f"    {mm.cv_name}: predicted={mm.predicted} true={mm.true}{prefix_note}"
+                )
+        console.print()
+
+        console.print("[bold]Seniority accuracy[/bold]")
+        console.print(f"  Exact match:        {format_pct(metrics.seniority_exact_rate)}")
+        console.print(f"  Off-by-one (±1):    {format_pct(metrics.seniority_off_by_one_rate)}")
+        console.print()
+
+    if metrics.n_with_salary > 0:
+        console.print("[bold]Salary accuracy[/bold]")
+        console.print(f"  MAE:                {format_czk(metrics.salary_mae)}")
+        console.print(f"  MAPE:               {format_pct(metrics.salary_mape)}")
+        console.print(f"  Within ±15%:        {format_pct(metrics.salary_within_15pct_rate)}")
+        console.print(f"  True in pred range: {format_pct(metrics.salary_range_coverage_rate)}")
+        console.print()
+
+    console.print("[bold]Warnings[/bold]")
+    console.print(f"  Total flags:        {metrics.warnings_total}")
+    console.print(f"  Avg per CV:         {metrics.warnings_per_cv:.1f}")
+    console.print()
+
+    console.print(f"[bold]Total API cost:[/bold] ${total_cost:.4f}")
+    console.print()
     console.print(
-        f"\n[dim]Cost: ${result.meta.get('total_cost_usd', 0):.4f} | "
-        f"Duration: {result.meta.get('total_duration_s', 0):.1f}s | "
-        f"Model: {result.meta.get('model', 'n/a')}[/dim]"
+        "[dim]Note: Accuracy is over the current labeled set only. "
+        "Add real labeled CVs to data/eval_labels.json for trustworthy calibration.[/dim]"
     )
 
 
-def print_aggregate(
-    results: list[tuple[str, PipelineResult | None, dict[str, bool] | None]],
-    console: Console,
-) -> None:
-    """Print aggregate stats after all fixtures."""
-    total = len(results)
-    passed_count = sum(
-        1 for _, r, c in results if r is not None and c is not None and all(c.values())
-    )
-    total_cost = sum(r.meta.get("total_cost_usd", 0) for _, r, _ in results if r is not None)
-    console.print(f"\n[bold]Result: {passed_count}/{total} fixtures passed[/bold]")
-    console.print(f"Total API cost: ${total_cost:.4f}")
+# ---------------------------------------------------------------------------
+# JSON export
+# ---------------------------------------------------------------------------
 
 
-def generate_html_report(
-    results: list[tuple[str, PipelineResult | None, dict[str, bool] | None]],
-    output_path: Path,
+def _build_json_export(
+    run_data: list[tuple[Label, PipelineResult | None, Prediction]],
+    metrics: EvalResults,
     total_cost: float,
     total_duration: float,
-) -> None:
-    """Generate a vanilla HTML+CSS report (no JS frameworks, no external CDN).
+) -> dict[str, Any]:
+    """Serialize predictions + metrics to a JSON-serializable dict.
 
-    Uses <details>/<summary> HTML5 elements for collapsible sections.
-    May use minimal vanilla JS for copy-to-clipboard.
-    No React, Vue, Alpine, chart.js, bootstrap, or jQuery.
+    Args:
+        run_data: Per-CV run results.
+        metrics: Aggregated metrics.
+        total_cost: Total API cost USD.
+        total_duration: Total wall-clock seconds.
+
+    Returns:
+        Dict ready for json.dumps().
+    """
+    cvs_out = []
+    for label, result, pred in run_data:
+        entry: dict[str, Any] = {
+            "cv": label.cv_name,
+            "true_isco": label.isco_code,
+            "true_seniority": label.seniority,
+            "predicted_isco": pred.isco_code,
+            "predicted_seniority": pred.seniority,
+            "predicted_salary_low": pred.salary.low if pred.salary else None,
+            "predicted_salary_high": pred.salary.high if pred.salary else None,
+            "score": result.score.total if result else None,
+            "cost_usd": result.meta.get("total_cost_usd") if result else None,
+            "error": result is None,
+        }
+        cvs_out.append(entry)
+
+    return {
+        "generated_at": datetime.datetime.now().isoformat(),
+        "total_cost_usd": total_cost,
+        "total_duration_s": total_duration,
+        "cvs": cvs_out,
+        "metrics": {
+            "n_total": metrics.n_total,
+            "n_labeled": metrics.n_labeled,
+            "n_with_salary": metrics.n_with_salary,
+            "isco_exact_rate": metrics.isco_exact_rate,
+            "isco_prefix3_rate": metrics.isco_prefix3_rate,
+            "seniority_exact_rate": metrics.seniority_exact_rate,
+            "seniority_off_by_one_rate": metrics.seniority_off_by_one_rate,
+            "salary_mae": metrics.salary_mae,
+            "salary_mape": metrics.salary_mape,
+            "salary_within_15pct_rate": metrics.salary_within_15pct_rate,
+            "salary_range_coverage_rate": metrics.salary_range_coverage_rate,
+            "warnings_total": metrics.warnings_total,
+            "warnings_per_cv": metrics.warnings_per_cv,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# HTML report
+# ---------------------------------------------------------------------------
+
+
+def _generate_html(
+    run_data: list[tuple[Label, PipelineResult | None, Prediction]],
+    metrics: EvalResults,
+    total_cost: float,
+    total_duration: float,
+    output_path: Path,
+) -> None:
+    """Write a vanilla HTML accuracy report.
+
+    Args:
+        run_data: Per-CV run results.
+        metrics: Aggregated metrics.
+        total_cost: Total API cost USD.
+        total_duration: Total wall-clock seconds.
+        output_path: Destination HTML file path.
     """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    sections: list[str] = []
-    for name, result, checks in results:
-        if result is None:
-            sections.append(f"""
-<div class="cv-block error">
-  <h2>{name} — <span class="fail">ERROR</span></h2>
-  <p>Pipeline failed for this fixture.</p>
-</div>""")
-            continue
+    metric_rows = ""
+    if metrics.n_labeled > 0:
+        metric_rows += (
+            f"<tr><td>ISCO exact match</td><td>{format_pct(metrics.isco_exact_rate)}</td></tr>"
+        )
+        metric_rows += (
+            f"<tr><td>ISCO 3-digit prefix</td><td>{format_pct(metrics.isco_prefix3_rate)}</td></tr>"
+        )
+        metric_rows += (
+            f"<tr><td>Seniority exact</td><td>{format_pct(metrics.seniority_exact_rate)}</td></tr>"
+        )
+        metric_rows += f"<tr><td>Seniority off-by-1</td><td>{format_pct(metrics.seniority_off_by_one_rate)}</td></tr>"
+    if metrics.n_with_salary > 0:
+        metric_rows += f"<tr><td>Salary MAE</td><td>{format_czk(metrics.salary_mae)}</td></tr>"
+        metric_rows += f"<tr><td>Salary MAPE</td><td>{format_pct(metrics.salary_mape)}</td></tr>"
+        metric_rows += (
+            f"<tr><td>Within ±15%</td><td>{format_pct(metrics.salary_within_15pct_rate)}</td></tr>"
+        )
+        metric_rows += f"<tr><td>True in pred range</td><td>{format_pct(metrics.salary_range_coverage_rate)}</td></tr>"
 
-        passed = checks is not None and all(checks.values())
-        status_class = "pass" if passed else "fail"
-        status_text = "PASS" if passed else "FAIL"
-
-        check_rows = ""
-        if checks:
-            for check_name, ok in checks.items():
-                icon = "✓" if ok else "✗"
-                row_class = "ok" if ok else "fail"
-                check_rows += f'<tr class="{row_class}"><td>{icon}</td><td>{check_name}</td></tr>'
-
-        component_rows = ""
-        for comp in result.score.components:
-            component_rows += f"""
-<tr>
-  <td>{comp.name}</td>
-  <td>{comp.score:.1f}</td>
-  <td>{comp.weight:.2f}</td>
-  <td class="reasoning">{comp.reasoning}</td>
-</tr>"""
-
-        rec_items = ""
-        for i, rec in enumerate(result.explanation.recommendations, 1):
-            rec_items += f"""
-<details class="rec">
-  <summary>{i}. {rec.title} (+{rec.estimated_salary_impact_pct:.0f}%, {rec.timeframe_months} months)</summary>
-  <p><strong>Why:</strong> {rec.why_it_matters}</p>
-  <p><strong>First action:</strong> {rec.first_action}</p>
-</details>"""
-
-        flag_items = ""
-        for flag in result.validation_flags:
-            flag_class = flag.severity
-            flag_items += f'<div class="flag {flag_class}">[{flag.severity.upper()}] {flag.field_path}: {flag.issue}</div>'
-
-        validation_section = f"""
-<details>
-  <summary>Validation flags ({len(result.validation_flags)})</summary>
-  {flag_items if flag_items else "<p>No validation flags.</p>"}
-</details>"""
-
-        strengths_html = "".join(f"<li>{s}</li>" for s in result.explanation.strengths)
-        gaps_html = "".join(f"<li>{g}</li>" for g in result.explanation.gaps)
-
-        sections.append(f"""
-<div class="cv-block">
-  <h2>{name} — <span class="{status_class}">{status_text}</span></h2>
-
-  <div class="meta-bar">
-    Score: <strong>{result.score.total:.1f}/100</strong> (confidence {result.score.confidence:.0%}) |
-    Salary: <strong>{result.salary.low:,}–{result.salary.high:,} CZK/month</strong> |
-    Cost: ${result.meta.get("total_cost_usd", 0):.4f} |
-    Duration: {result.meta.get("total_duration_s", 0):.1f}s
-  </div>
-
-  <details>
-    <summary>Quality checks</summary>
-    <table class="checks-table"><tbody>{check_rows}</tbody></table>
-  </details>
-
-  <details>
-    <summary>Score breakdown</summary>
-    <table class="score-table">
-      <thead><tr><th>Component</th><th>Score</th><th>Weight</th><th>Reasoning</th></tr></thead>
-      <tbody>{component_rows}</tbody>
-    </table>
-  </details>
-
-  {validation_section}
-
-  <details>
-    <summary>Analysis summary</summary>
-    <p>{result.explanation.summary}</p>
-    <h4>Strengths</h4><ul>{strengths_html}</ul>
-    <h4>Gaps</h4><ul>{gaps_html}</ul>
-  </details>
-
-  <details open>
-    <summary>Recommendations</summary>
-    {rec_items}
-  </details>
-
-  <details>
-    <summary>Raw resume data</summary>
-    <pre class="json-pre">{json.dumps(result.resume.model_dump(), indent=2, ensure_ascii=False)}</pre>
-  </details>
-</div>""")
+    cv_rows = ""
+    for label, result, pred in run_data:
+        true_isco = label.isco_code
+        pred_isco = pred.isco_code or "N/A"
+        isco_ok = pred_isco == true_isco
+        isco_cls = "match" if isco_ok else "mismatch"
+        true_sr = label.seniority
+        pred_sr = pred.seniority or "N/A"
+        sr_cls = "match" if pred_sr == true_sr else "mismatch"
+        true_sal = _fmt_salary_label(label)
+        pred_sal = f"{pred.salary.low:,}–{pred.salary.high:,}" if pred.salary else "N/A"
+        score_str = f"{result.score.total:.1f}" if result else "ERROR"
+        cost_str = f"${result.meta.get('total_cost_usd', 0):.4f}" if result else "-"
+        status_cls = "ok" if result else "err"
+        cv_rows += (
+            f"<tr class='{status_cls}'>"
+            f"<td>{label.cv_name}</td>"
+            f"<td>{true_isco}</td>"
+            f"<td class='{isco_cls}'>{pred_isco}</td>"
+            f"<td>{true_sr}</td>"
+            f"<td class='{sr_cls}'>{pred_sr}</td>"
+            f"<td>{true_sal}</td>"
+            f"<td>{pred_sal}</td>"
+            f"<td>{score_str}</td>"
+            f"<td>{cost_str}</td>"
+            f"</tr>"
+        )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Job Fit Estimator — Eval Report</title>
+  <title>Job Fit Estimator — Accuracy Eval Report</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           max-width: 1100px; margin: 40px auto; padding: 0 20px;
+           max-width: 1200px; margin: 40px auto; padding: 0 20px;
            color: #333; background: #f9f9f9; }}
     h1 {{ color: #1a1a2e; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }}
-    .header-meta {{ color: #666; font-size: 0.9em; margin-bottom: 30px; }}
-    .cv-block {{ background: white; border: 1px solid #e0e0e0; border-radius: 8px;
-                padding: 24px; margin-bottom: 24px; }}
-    .cv-block.error {{ border-color: #ffcccc; background: #fff5f5; }}
-    .cv-block h2 {{ margin-top: 0; font-size: 1.2em; }}
-    .meta-bar {{ background: #f5f7fa; padding: 8px 12px; border-radius: 4px;
-                font-size: 0.9em; margin: 12px 0; }}
-    .pass {{ color: #22863a; font-weight: bold; }}
-    .fail {{ color: #cb2431; font-weight: bold; }}
-    details {{ margin: 8px 0; }}
-    summary {{ cursor: pointer; padding: 6px 10px; background: #f0f4f8;
-               border-radius: 4px; user-select: none; font-weight: 500; }}
-    summary:hover {{ background: #e2e8f0; }}
-    .score-table, .checks-table {{ width: 100%; border-collapse: collapse;
-                                   font-size: 0.88em; margin-top: 8px; }}
-    .score-table th, .score-table td,
-    .checks-table th, .checks-table td {{ padding: 6px 10px; border: 1px solid #e0e0e0;
-                                          text-align: left; }}
-    .score-table th {{ background: #f0f4f8; font-weight: 600; }}
-    .reasoning {{ color: #555; font-size: 0.85em; }}
-    tr.ok td {{ color: #22863a; }}
-    tr.fail td {{ color: #cb2431; }}
-    .flag {{ padding: 4px 8px; margin: 4px 0; border-radius: 3px; font-size: 0.85em; }}
-    .flag.error {{ background: #ffebee; color: #c62828; }}
-    .flag.warning {{ background: #fff8e1; color: #f57f17; }}
-    .flag.info {{ background: #e3f2fd; color: #1565c0; }}
-    .rec {{ margin: 6px 0; border-left: 3px solid #4a90d9; padding-left: 10px; }}
-    .json-pre {{ background: #1e1e1e; color: #d4d4d4; padding: 16px;
-                border-radius: 4px; overflow-x: auto; font-size: 0.8em;
-                max-height: 400px; }}
-    .summary-bar {{ background: white; border: 1px solid #e0e0e0; border-radius: 8px;
-                   padding: 16px 24px; margin-bottom: 24px; font-size: 0.95em; }}
+    .meta {{ color: #666; font-size: 0.9em; margin-bottom: 24px; }}
+    .metrics-table, .cv-table {{ width: 100%; border-collapse: collapse; margin: 16px 0; }}
+    .metrics-table th, .metrics-table td,
+    .cv-table th, .cv-table td {{ padding: 8px 12px; border: 1px solid #e0e0e0; text-align: left; }}
+    .metrics-table th, .cv-table th {{ background: #f0f4f8; font-weight: 600; }}
+    tr.err {{ background: #fff5f5; }}
+    .match {{ color: #22863a; font-weight: bold; }}
+    .mismatch {{ color: #cb2431; }}
+    h2 {{ margin-top: 32px; color: #1a1a2e; }}
+    .note {{ font-size: 0.85em; color: #666; margin-top: 16px; }}
   </style>
-  <script>
-    // Copy pre content to clipboard
-    function copyJson(btn) {{
-      const pre = btn.previousElementSibling;
-      navigator.clipboard.writeText(pre.textContent).then(() => {{
-        btn.textContent = 'Copied!';
-        setTimeout(() => btn.textContent = 'Copy JSON', 1500);
-      }});
-    }}
-  </script>
 </head>
 <body>
-  <h1>Job Fit Estimator — Eval Report</h1>
-  <div class="header-meta">
+  <h1>Job Fit Estimator — Accuracy Eval Report</h1>
+  <div class="meta">
     Generated: {timestamp} |
+    Labeled CVs: {metrics.n_labeled}/{metrics.n_total} |
     Total cost: ${total_cost:.4f} |
-    Total duration: {total_duration:.1f}s
+    Duration: {total_duration:.1f}s
   </div>
-  {"".join(sections)}
+
+  <h2>Aggregate Metrics</h2>
+  <table class="metrics-table">
+    <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+    <tbody>{metric_rows}</tbody>
+  </table>
+
+  <h2>Per-CV Results</h2>
+  <table class="cv-table">
+    <thead>
+      <tr>
+        <th>CV</th><th>True ISCO</th><th>Pred ISCO</th>
+        <th>True Sr.</th><th>Pred Sr.</th>
+        <th>True Salary</th><th>Pred Salary</th>
+        <th>Score</th><th>Cost</th>
+      </tr>
+    </thead>
+    <tbody>{cv_rows}</tbody>
+  </table>
+
+  <p class="note">
+    ISCO match: green = exact, red = mismatch.<br>
+    Accuracy is over the current labeled set only. Add real labeled CVs to
+    <code>data/eval_labels.json</code> for trustworthy calibration (~100 CVs target).
+  </p>
 </body>
 </html>"""
 
     output_path.write_text(html, encoding="utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Job Fit Estimator eval harness")
-    parser.add_argument("--cv", type=Path, help="Run on custom CV instead of fixtures")
-    parser.add_argument("--html", type=Path, help="Generate HTML report at this path")
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
+
+def main() -> None:
+    """Entry point for the eval harness."""
+    arg_parser = argparse.ArgumentParser(description="Job Fit Estimator accuracy eval harness")
+    arg_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Run only the first N entries (cost guard)",
+    )
+    arg_parser.add_argument(
+        "--only",
+        type=str,
+        default=None,
+        metavar="SUBSTR",
+        help="Run only entries whose cv path contains SUBSTR",
+    )
+    arg_parser.add_argument("--json", type=Path, default=None, help="Export JSON to this path")
+    arg_parser.add_argument("--html", type=Path, default=None, help="Export HTML to this path")
+    args = arg_parser.parse_args()
+
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
     console = Console()
+
+    # ── Load labels ──────────────────────────────────────────────────────────
+    if not _LABELS_PATH.exists():
+        console.print(f"[red]ERROR: labels file not found: {_LABELS_PATH}[/red]")
+        sys.exit(1)
+
+    labels = _load_labels(_LABELS_PATH)
+
+    # ── Apply filters ────────────────────────────────────────────────────────
+    # Load raw entries again to get the original cv path for file resolution
+    raw_entries: list[dict[str, Any]] = json.loads(_LABELS_PATH.read_text(encoding="utf-8"))
+    filtered_entries = raw_entries
+    if args.only:
+        filtered_entries = [e for e in filtered_entries if args.only in e["cv"]]
+    if args.limit:
+        filtered_entries = filtered_entries[: args.limit]
+
+    if not filtered_entries:
+        console.print("[yellow]No entries match the given filters.[/yellow]")
+        sys.exit(0)
+
+    # Rebuild labels list to match filtered entries
+    all_labels_by_name = {lb.cv_name: lb for lb in labels}
+
+    console.print(
+        f"\n[bold]Job Fit Estimator — Accuracy Eval[/bold]  "
+        f"({len(filtered_entries)} CV(s), labels from data/eval_labels.json)\n"
+    )
+
+    # ── Initialize pipeline ──────────────────────────────────────────────────
     pipeline = Pipeline()
 
-    results: list[tuple[str, PipelineResult | None, dict[str, bool] | None]] = []
-    total_wall_start = time.monotonic()
+    # ── Run each CV ──────────────────────────────────────────────────────────
+    run_data: list[tuple[Label, PipelineResult | None, Prediction]] = []
+    predictions: list[Prediction] = []
+    all_labels_used: list[Label] = []
 
-    if args.cv:
-        console.print(f"\n[bold]Analyzing:[/bold] {args.cv}")
-        try:
-            result = pipeline.run(args.cv)
-            print_full_result(result, console)
-            results.append((args.cv.name, result, None))
-        except Exception as e:
-            console.print(f"[red]FAIL: {e}[/red]")
-            results.append((args.cv.name, None, None))
-    else:
-        console.print("\n[bold]Running eval on all 5 fixtures...[/bold]\n")
-        for fixture_name, expected in EXPECTED.items():
-            fixture_path = FIXTURES_DIR / fixture_name
-            if not fixture_path.exists():
-                console.print(
-                    f"  [yellow]SKIP {fixture_name}: fixture not found. "
-                    f"Run: python scripts/generate_fixtures.py[/yellow]"
+    wall_start = time.monotonic()
+
+    for entry in filtered_entries:
+        cv_rel = Path(str(entry["cv"]))
+        cv_path = _PROJECT_ROOT / cv_rel
+        cv_name = cv_path.name
+        label = all_labels_by_name.get(cv_name)
+        if label is None:
+            console.print(f"  [yellow]SKIP {cv_name}: no label found (name mismatch?)[/yellow]")
+            continue
+
+        if not cv_path.exists():
+            console.print(f"  [yellow]SKIP {cv_name}: file not found at {cv_path}[/yellow]")
+            run_data.append(
+                (
+                    label,
+                    None,
+                    Prediction(cv_name=cv_name, isco_code=None, seniority=None, salary=None),
                 )
-                results.append((fixture_name, None, None))
-                continue
+            )
+            continue
 
-            try:
-                result = pipeline.run(fixture_path)
-                checks = check_result(fixture_name, result, expected)
-                results.append((fixture_name, result, checks))
-                print_summary_row(fixture_name, result, checks, console)
-            except Exception as e:
-                console.print(f"  [red]FAIL {fixture_name}: {e}[/red]")
-                results.append((fixture_name, None, None))
+        result, pred = _run_cv(pipeline, cv_path, label, console)
+        run_data.append((label, result, pred))
+        predictions.append(pred)
+        all_labels_used.append(label)
 
-        total_duration = time.monotonic() - total_wall_start
-        print_aggregate(results, console)
+    total_duration = time.monotonic() - wall_start
+    total_cost = sum(r.meta.get("total_cost_usd", 0) for _, r, _ in run_data if r is not None)
 
-    total_duration = time.monotonic() - total_wall_start
-    total_cost = sum(r.meta.get("total_cost_usd", 0) for _, r, _ in results if r is not None)
+    # ── Metrics ──────────────────────────────────────────────────────────────
+    # Use ALL labels from the file for metric denominators (not just filtered ones),
+    # but only pass predictions that actually ran.
+    metrics = aggregate_metrics(predictions, all_labels_used)
+
+    # ── Print report ─────────────────────────────────────────────────────────
+    console.print()
+    _print_per_cv_table(console, run_data)
+    console.print()
+    _print_aggregate(console, metrics, total_cost)
+
+    # ── Exports ──────────────────────────────────────────────────────────────
+    if args.json:
+        payload = _build_json_export(run_data, metrics, total_cost, total_duration)
+        args.json.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        console.print(f"[green]JSON export: {args.json}[/green]")
 
     if args.html:
-        generate_html_report(results, args.html, total_cost, total_duration)
-        console.print(f"\n[green]HTML report saved: {args.html}[/green]")
+        _generate_html(run_data, metrics, total_cost, total_duration, args.html)
+        console.print(f"[green]HTML report: {args.html}[/green]")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,47 @@
+[
+  {
+    "cv": "tests/fixtures/cv_it_developer.txt",
+    "occupation": "Backend developer / Python architect",
+    "isco_code": "2512",
+    "seniority": "senior",
+    "salary_czk_month": {"low": 130000, "high": 165000},
+    "salary_source": "ISPV-2025-annual ISCO 2512 senior band + Praha x1.15, no explicit management multiplier (mentoring 4 devs is noted but is_management depends on LLM parse)",
+    "notes": "Petr Novak: 8 years exp (junior->senior progression), CVUT Bc., Praha. Score expected ~78-85 -> senior band. ISPV 2512 senior Praha x1.15: low~142k high~215k — label uses conservative inner range to account for model score variance."
+  },
+  {
+    "cv": "tests/fixtures/cv_healthcare_nurse.txt",
+    "occupation": "Registered nurse specialist (ICU / ARO)",
+    "isco_code": "2221",
+    "seniority": "senior",
+    "salary_czk_month": {"low": 75000, "high": 95000},
+    "salary_source": "ISPV-2025-annual ISCO 2221 senior band + Praha x1.15. Raw ISPV 2221 senior: low=68919 high=82792; x1.15 rounded: low=79k high=95k. Lower bound set at 75k to allow for score landing at medior/senior border.",
+    "notes": "Marie Dvorakova, DiS.: 10 years exp, ARIP specialist, VFN Praha. Score expected ~65-78. ISCO 2221 (sestry se specializaci) is correct — she has completed ARIP postgrad. Brno-born but currently Praha -> Praha multiplier applies."
+  },
+  {
+    "cv": "tests/fixtures/cv_sales_repr.txt",
+    "occupation": "B2B sales representative / account manager",
+    "isco_code": "3412",
+    "seniority": "medior",
+    "salary_czk_month": {"low": 38000, "high": 60000},
+    "salary_source": "ISPV-2025-annual ISCO 3412 (pojistni agenti / obchodni zastupci) medior/senior band, Brno x1.0. Jana's profile is most consistent with ISCO 3412 (insurance and financial services sales agents) or 2433 (sales specialists); LLM may pick either. Range spans ISCO 3412 medior through ISCO 2433 medior to accommodate both mappings.",
+    "notes": "Jana Horakova: 9 years B2B sales (insurance, banking, telecom), Brno, Bc. economics. Score expected ~60-72. Brno location: x1.0 multiplier. Note: LLM ISCO assignment is the main uncertainty here — 2433 (senior band) would push high to ~100k, 3412 is more conservative."
+  },
+  {
+    "cv": "tests/fixtures/cv_trades_cook.txt",
+    "occupation": "Head chef / sous chef",
+    "isco_code": "5120",
+    "seniority": "senior",
+    "salary_czk_month": {"low": 32000, "high": 52000},
+    "salary_source": "ISPV-2025-annual ISCO 5120 (kuchare) senior band, Brno x1.0. Management multiplier x1.10 likely applied (head chef with 7-person team). Raw: senior low=31603 high=46097; with mgmt x1.1: low~35k high~51k. Range includes both mgmt and no-mgmt scenarios.",
+    "notes": "Jan Cerny: 12 years gastro, head chef (team of 10), Brno. Score expected ~70-80 -> senior band. Education: vycucni list / 'other' degree -> low edu score. ISCO 5120 is correct (kuchare). Praha multiplier does NOT apply — Brno location."
+  },
+  {
+    "cv": "tests/fixtures/cv_real_world.pdf",
+    "occupation": "UNKNOWN — owner must label after inspecting the CV",
+    "isco_code": "TODO",
+    "seniority": "TODO",
+    "salary_czk_month": {"low": 0, "high": 0},
+    "salary_source": "TODO_real — owner must fill the actual salary figure or band from their knowledge of this candidate",
+    "notes": "Real-world CV. ISCO, seniority, and salary are placeholders — the CV owner knows the truth. Instructions: (1) open the PDF, determine the person's actual occupation and ISCO 4-digit code, (2) determine their actual seniority band, (3) fill salary_czk_month with either an int (single known figure) or {low, high} band from a reliable source (offer letter, salary survey, ISPV lookup). Until filled, this entry is excluded from accuracy metrics but the pipeline is still run to catch crashes."
+  }
+]

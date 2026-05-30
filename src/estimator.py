@@ -3,12 +3,19 @@
 Produces SalaryEstimate (CZK range) from Resume + SeniorityScore using
 ISPV M8r 2025 dataset via ISPVLoader. Hard error if ISPV data is not loaded
 or no ISCO code is present — no silent fallback per project decision Q4 2026.
+
+Salary-band selection is driven by ROLE seniority (parsed title + years of
+experience), NOT by the composite SeniorityScore.total. The composite score
+is a blend of experience + skills + education + progression + domain; education
+and skill breadth must not push a genuine senior into the lead salary band.
+See infer_salary_seniority() for the decoupled logic.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from typing import Literal
 
 from src.salary_ispv import (
     ISPVDataMissingError,
@@ -17,9 +24,12 @@ from src.salary_ispv import (
     MissingISCOError,
     NonCZLocationError,
 )
-from src.schemas import Resume, SalaryBand, SalaryData, SalaryEstimate, SeniorityScore
+from src.schemas import Experience, Resume, SalaryBand, SalaryData, SalaryEstimate, SeniorityScore
 
 logger = logging.getLogger(__name__)
+
+# Seniority band type alias — mirrors Experience.seniority_level literal.
+SeniorityBand = Literal["junior", "medior", "senior", "lead", "principal"]
 
 # Location multipliers applied on top of ISPV national bands.
 # ISPV M8r is country-wide aggregate; Praha pays ~24% above national median,
@@ -89,9 +99,12 @@ _NON_CZ_COUNTRIES_RE = re.compile(
 
 
 def _score_to_seniority(total: float) -> str:
-    """Map SeniorityScore.total (0-100) to salary band name.
+    """Map SeniorityScore.total (0-100) to a DISPLAY seniority label.
 
-    # TODO(review): salary-band-from-total-score thresholds need empirical calibration.
+    This label is shown in the UI and stored in assumptions for transparency.
+    It is NOT used for salary band selection — see infer_salary_seniority().
+
+    # TODO(review): display-seniority thresholds need empirical calibration.
     # Current breakpoints (junior<30, medior<60, senior<80, lead<92, principal>=92)
     # were chosen by intuition.  To calibrate properly:
     # 1. Collect a ground-truth set of labelled CVs with known seniority levels
@@ -111,6 +124,144 @@ def _score_to_seniority(total: float) -> str:
         return "lead"
     else:
         return "principal"
+
+
+def _primary_experience(resume: Resume) -> Experience | None:
+    """Return the candidate's primary / most-recent substantive experience entry.
+
+    Uses the same recency key as estimate() for ISCO selection:
+    - ongoing roles (end_year=None) first,
+    - then by end_year descending,
+    - then longer-running tenure wins the tie-break (lower start_year).
+    """
+    if not resume.experiences:
+        return None
+
+    def _recency_key(exp: Experience) -> tuple[int, int, int]:
+        end = exp.end_year
+        start = exp.start_year or 0
+        is_current = 1 if end is None else 0
+        return (is_current, end or 0, -start)
+
+    return sorted(resume.experiences, key=_recency_key, reverse=True)[0]
+
+
+def _years_of_relevant_experience(resume: Resume) -> int:
+    """Compute de-duplicated total years of experience across all entries.
+
+    Overlapping intervals are merged so parallel roles don't double-count.
+    """
+    from datetime import UTC, datetime
+
+    current = datetime.now(UTC).year
+    intervals: list[tuple[int, int]] = sorted(
+        (exp.start_year, exp.end_year or current)
+        for exp in resume.experiences
+        if (exp.end_year or current) > exp.start_year
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return max(0, sum(end - start for start, end in merged))
+
+
+def infer_salary_seniority(resume: Resume) -> tuple[SeniorityBand, bool]:
+    """Derive the salary band from ROLE-grounded signals only.
+
+    Education, skill breadth, and composite scores must NOT influence this.
+    The goal is conservative accuracy: when in doubt, pick the LOWER band to
+    avoid over-estimating salary (public-facing tool).
+
+    Strategy (in priority order):
+    1. Explicit seniority_level on the primary/most-recent role — the strongest
+       signal because it comes directly from the candidate's job title.
+    2. Any explicit lead/principal seniority_level anywhere in career history
+       combined with management signals — they held the role, they get the band.
+    3. Fallback: infer from total years of relevant experience + management flag.
+
+    Heuristic year thresholds (conservative, bias toward lower band on tie):
+      < 2y  → junior
+      2–5y  → medior  (inclusive of 2, exclusive of 5)
+      5–9y  → senior  (inclusive of 5, exclusive of 9)
+      9y+   → senior  (default unless explicit lead/management signals)
+      lead  → only with explicit lead/principal seniority_level OR is_management=True
+
+    Returns:
+        (band, inferred) — inferred=True means we fell back to heuristics;
+        the caller should surface a warning to the UI so the user knows confidence
+        is lower.
+
+    # TODO(review): year thresholds (<2 junior, 2–5 medior, 5–9 senior, 9+ senior/lead)
+    # are heuristic placeholders. Calibrate against the labeled eval set once N >= 50
+    # per band. Derive thresholds from the precision-recall curve for each boundary.
+    """
+    primary = _primary_experience(resume)
+    total_years = _years_of_relevant_experience(resume)
+    has_management = any(exp.is_management for exp in resume.experiences)
+
+    level_order: dict[str, int] = {
+        "junior": 0,
+        "medior": 1,
+        "senior": 2,
+        "lead": 3,
+        "principal": 4,
+    }
+
+    # Years-based band — a concrete tenure signal. Capped at 'senior': long tenure
+    # alone never implies lead/principal (those need an explicit title or a
+    # management signal). Education and skills are deliberately excluded.
+    if total_years < 2:
+        years_band: SeniorityBand = "junior"
+    elif total_years < 5:
+        years_band = "medior"
+    else:
+        years_band = "lead" if (total_years >= 9 and has_management) else "senior"
+
+    # --- Signal 1: explicit seniority_level on the primary role ---
+    if primary is not None and primary.seniority_level is not None:
+        level: SeniorityBand = primary.seniority_level  # type: ignore[assignment]
+        # 'medior' is the parser's DEFAULT for titles without an explicit level
+        # (e.g. a plain "Developer"), so it is a weak signal — let concrete years
+        # of experience LIFT it (a 10y dev is not a medior). Explicit junior and
+        # senior/lead/principal are real signals from the title, trusted as-is.
+        if level == "medior" and level_order[years_band] > level_order["medior"]:
+            return years_band, True
+        return level, False
+
+    # --- Signal 2: explicit lead/principal anywhere in career + management ---
+    # Candidate's most recent role title didn't carry a level, but earlier roles did.
+    best_level_anywhere: SeniorityBand | None = None
+    for exp in resume.experiences:
+        if exp.seniority_level is not None:
+            current_rank = level_order.get(exp.seniority_level, -1)
+            best_rank = level_order.get(best_level_anywhere or "junior", 0)
+            if best_level_anywhere is None or current_rank > best_rank:
+                best_level_anywhere = exp.seniority_level  # type: ignore[assignment]
+
+    if best_level_anywhere in ("lead", "principal"):
+        # They explicitly held a lead/principal role somewhere — honor it.
+        return best_level_anywhere, False  # type: ignore[return-value]
+
+    if best_level_anywhere in ("senior", "medior", "junior"):
+        # We have a partial signal — combine with years for better confidence.
+        # At this point we KNOW the primary role has no label, so use years as
+        # corroboration: if best explicit label is "senior" and years >= 5, trust it.
+        if best_level_anywhere == "senior" and total_years >= 5:
+            return "senior", False
+        if best_level_anywhere == "medior" and total_years >= 2:
+            return "medior", False
+        if best_level_anywhere == "junior" and total_years < 5:
+            return "junior", False
+        # Fall through to heuristic if mismatch (e.g. "junior" title but 10+ years).
+
+    # --- Signal 3: heuristic from years + management flag ---
+    # years_band (computed above) already encodes the conservative mapping:
+    # senior for long careers, lead only with an explicit management signal.
+    # Education/skills must NOT trigger promotion (root cause of the original bug).
+    return years_band, True  # inferred — surface as low-confidence warning
 
 
 class SalaryEstimator:
@@ -178,9 +329,15 @@ class SalaryEstimator:
     def estimate(self, resume: Resume, score: SeniorityScore) -> SalaryEstimate:
         """Produce a salary estimate backed by ISPV M8r 2025 data.
 
+        Salary band is selected via infer_salary_seniority(resume), which reads
+        role-level signals (parsed seniority_level, years of experience, management
+        flag) — NOT from score.total. score.total is a composite that blends in
+        education and skill breadth; those must not influence the salary band.
+
         Args:
             resume: Structured resume with ISCO codes on experience entries.
-            score:  Seniority score used to select the salary band.
+            score:  Seniority score — used for DISPLAY only (composite total shown
+                    in assumptions); not used for band selection.
 
         Returns:
             SalaryEstimate with low/mid/high CZK values.
@@ -189,7 +346,19 @@ class SalaryEstimator:
             ISPVLookupError: If ISPV data is not loaded, no ISCO code found,
                              or ISCO lookup fails at all fallback levels.
         """
-        seniority = _score_to_seniority(score.total)
+        # Role-grounded seniority for salary band selection (decoupled from composite score).
+        seniority, seniority_inferred = infer_salary_seniority(resume)
+        # Display seniority from composite score — shown in UI / logs but not used for band.
+        display_seniority = _score_to_seniority(score.total)
+        if seniority_inferred:
+            logger.warning(
+                "Salary seniority inferred from experience years / management signal "
+                "(no explicit seniority_level on primary role). "
+                "Band=%s  composite_display=%s  score.total=%.1f",
+                seniority,
+                display_seniority,
+                score.total,
+            )
 
         if self._is_non_cz_location(resume):
             raise NonCZLocationError(
@@ -316,10 +485,22 @@ class SalaryEstimator:
             if not is_top_band
             else f"mgmt × 1.00 (already in {seniority} band extrapolation)"
         )
+        seniority_source = "inferred (years+mgmt)" if seniority_inferred else "role title"
         reasoning = (
             f"Zdroj: ISPV M8r 2025 (ISCO {salary_data.isco_code}, "
-            f"{salary_data.isco_match_level}) | {seniority} band | "
+            f"{salary_data.isco_match_level}) | {seniority} band [{seniority_source}] | "
             f"location × {location_mult:.2f} | {management_note}"
+        )
+
+        seniority_assumption = f"Salary band: {seniority} (from {seniority_source})" + (
+            " — LOW CONFIDENCE: no explicit seniority_level on role title; "
+            "verify the band against the actual job level"
+            if seniority_inferred
+            else ""
+        )
+        composite_assumption = (
+            f"Composite score (display only, not used for band): {score.total:.1f} "
+            f"→ would map to '{display_seniority}' — education/skills excluded from band selection"
         )
 
         return SalaryEstimate(
@@ -329,7 +510,8 @@ class SalaryEstimator:
             high=high,
             reasoning=reasoning,
             assumptions=[
-                f"Seniority band: {seniority} (score {score.total:.1f})",
+                seniority_assumption,
+                composite_assumption,
                 f"ISCO code: {salary_data.isco_code} ({salary_data.isco_match_level})",
                 f"Location multiplier: × {location_mult:.2f}",
                 (

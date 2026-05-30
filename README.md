@@ -78,10 +78,91 @@ Volitelný **Layer 2 — EmbeddingValidator** (off by default, opt-in v `Pipelin
 ## Test plan
 
 ```bash
-make test                              # 195 unit testů (pytest), ~2 s
-make eval                              # eval harness (live LLM) na PDF fixtures v tests/fixtures/
-uv run python scripts/eval.py --html report.html
+make test                              # unit testy (pytest), ~2 s  — NO LLM calls
+uv run python scripts/eval.py --limit 2          # accuracy eval na 2 CVs (~$0.004)
+uv run python scripts/eval.py --html report.html # full eval + HTML report
 ```
+
+## Evaluating accuracy
+
+Accuracy is measured against a labeled ground-truth file, not just plausibility
+ranges. The harness lives in `scripts/eval.py`; labels in `data/eval_labels.json`.
+
+### Label schema
+
+```json
+{
+  "cv": "tests/fixtures/cv_it_developer.txt",
+  "occupation": "Backend developer / Python architect",
+  "isco_code": "2512",
+  "seniority": "junior|medior|senior|lead|principal",
+  "salary_czk_month": 95000,
+  "salary_source": "ISPV-2025-annual ISCO 2512 senior band + Praha x1.15",
+  "notes": "optional context"
+}
+```
+
+`salary_czk_month` can be a scalar int (single known figure) or `{"low": X, "high": Y}`
+for a range. `salary_source` documents where the truth came from:
+- `"ISPV-2025-annual ..."` — derived from the ISPV dataset + documented multipliers (legitimate ground truth for synthetic profiles)
+- `"real"` — actual known salary from an offer letter / negotiation
+- `"TODO_real"` — placeholder; the CV owner must fill before this entry contributes to salary metrics
+
+Entries with `isco_code == "TODO"` or `seniority == "TODO"` or `salary_source` containing
+`"TODO_real"` are excluded from accuracy metrics but still run through the pipeline
+(crash detection stays active).
+
+### Metrics computed
+
+| Metric | What it measures |
+|---|---|
+| ISCO exact match | 4-digit ISCO code exact equality rate |
+| ISCO 3-digit prefix | 3-digit prefix agreement (occupation group correct, sub-group off) |
+| Seniority exact | Band exact match rate |
+| Seniority off-by-one | Adjacent-band agreement (e.g. medior predicted vs senior true) |
+| Salary MAE | Mean absolute error of predicted midpoint vs true midpoint (CZK) |
+| Salary MAPE | Mean absolute percentage error vs true midpoint |
+| Within ±15% | Fraction of CVs where predicted mid is within ±15% of true mid |
+| True in pred range | Fraction where true salary label's range overlaps predicted low–high |
+
+### Running the eval
+
+```bash
+# All labeled CVs (~$0.02 on gpt-4o-mini for 5 entries)
+uv run python scripts/eval.py
+
+# Cost-controlled runs
+uv run python scripts/eval.py --limit 2          # first 2 entries
+uv run python scripts/eval.py --only nurse       # entries whose cv path contains "nurse"
+
+# Exports
+uv run python scripts/eval.py --json out.json
+uv run python scripts/eval.py --html out.html
+```
+
+The script calls OpenAI — it is **not** run in `pytest` (no CI cost). Run it manually
+or as a nightly job.
+
+### Adding a labeled CV
+
+1. Place the CV file in `tests/fixtures/` (PDF or TXT).
+2. Add an entry to `data/eval_labels.json` with the correct `isco_code`, `seniority`,
+   and `salary_czk_month`. Use `salary_source: "real"` for actual salaries, or
+   `salary_source: "ISPV-2025-annual ..."` when the label was derived from ISPV data.
+3. Commit `data/eval_labels.json` and the fixture file. The JSON is tracked — it is
+   the ground truth; it does not grow from prompt iteration.
+
+### Calibration target
+
+The current labeled set has 4 synthetic profiles + 1 real-world TODO. Accuracy numbers
+from 5 CVs are anecdotal. The target for trustworthy calibration is **~100 real labeled
+CVs** covering a spread of roles, seniority levels, locations, and sectors. Until then,
+the eval serves as a regression check and a way to surface concrete failure modes, not
+as a publishable benchmark.
+
+This harness is what unblocks the `TODO(review)` items in `src/estimator.py` and
+`src/scorer.py` — Praha multiplier calibration, seniority-band thresholds, and ISPV
+confidence scoring all require a labeled set to tune and validate against.
 
 ## Náklady & latency
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,10 +16,14 @@ from src.cost_tracker import (
     CostRecord,
     _budget_from_settings,  # pyright: ignore[reportPrivateUsage]
     _budget_lock,  # pyright: ignore[reportPrivateUsage]
+    _release_reservation,  # pyright: ignore[reportPrivateUsage]
+    _reservations,  # pyright: ignore[reportPrivateUsage]
     check_budget,
     daily_spent,
+    finalize,
     new_run_id,
     record_run,
+    reserve,
 )
 
 
@@ -39,6 +44,14 @@ def _make_record(
         duration_s=3.5,
         score_total=72.0,
     )
+
+
+@pytest.fixture(autouse=True)
+def _clear_reservations() -> Generator[None, None, None]:
+    """Ensure no reservations leak between tests."""
+    _reservations.clear()
+    yield
+    _reservations.clear()
 
 
 class TestDailySpent:
@@ -75,6 +88,17 @@ class TestDailySpent:
             f'{{"timestamp_utc": "{today}T11:00:00+00:00", "total_cost_usd": 0.05}}\n'
         )
         assert daily_spent(log) == pytest.approx(0.15)
+
+    def test_includes_outstanding_reservations(self, tmp_path: Path) -> None:
+        """daily_spent adds outstanding in-memory reservations to JSONL actuals."""
+        log = tmp_path / ".cost_log.jsonl"
+        # Seed one committed record
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        log.write_text(f'{{"timestamp_utc": "{today}T10:00:00+00:00", "total_cost_usd": 0.10}}\n')
+        # Manually inject a reservation (bypassing reserve() to avoid budget check)
+        _reservations["test-run-abc"] = 0.05
+        result = daily_spent(log)
+        assert result == pytest.approx(0.15)
 
 
 class TestCheckBudget:
@@ -212,55 +236,227 @@ class TestBudgetLock:
         assert _budget_lock.acquire(blocking=False), "Lock not released after BudgetExceededError"
         _budget_lock.release()
 
-    def test_concurrent_requests_see_toctou_protection(
+
+class TestReserveFinalize:
+    """Tests for the reservation protocol (reserve / finalize / _release_reservation)."""
+
+    def test_reserve_claims_budget_slot(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Two threads calling check_budget concurrently must not both pass when budget is tight.
+        """After reserve(), daily_spent includes the reserved amount."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "1.00")
+        log = tmp_path / ".cost_log.jsonl"
+        run_id = "reserve-test-001"
+        reserve(run_id, 0.10, log_path=log)
+        assert daily_spent(log) == pytest.approx(0.10)
+        _release_reservation(run_id)
 
-        This is a best-effort race test: we set a budget of $0.05 and fire two
-        threads each trying to spend $0.04.  Without the lock at least one of
-        the recorded amounts would be wrong; with the lock only one should be
-        allowed to pass (the second sees the first's record already written).
+    def test_reserve_raises_when_over_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """reserve() raises BudgetExceededError when estimate would exceed budget."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.05")
+        log = tmp_path / ".cost_log.jsonl"
+        with pytest.raises(BudgetExceededError, match="Daily budget would be exceeded"):
+            reserve("run-too-big", 0.10, log_path=log)
+        # No reservation must have been stored on failure.
+        assert "run-too-big" not in _reservations
 
-        Note: the test is inherently timing-dependent.  We use a barrier to
-        maximise the chance of a genuine race.
-        """
+    def test_reserve_accounts_for_existing_reservations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second reserve() sees the first reservation and raises if combined > budget."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.07")
+        log = tmp_path / ".cost_log.jsonl"
+        run_a = "run-a"
+        run_b = "run-b"
+        reserve(run_a, 0.05, log_path=log)
+        # 0.05 reserved + 0.04 estimate = 0.09 > 0.07 → must raise
+        with pytest.raises(BudgetExceededError):
+            reserve(run_b, 0.04, log_path=log)
+        # Only run_a reservation exists
+        assert run_a in _reservations
+        assert run_b not in _reservations
+        _release_reservation(run_a)
+
+    def test_finalize_writes_record_and_removes_reservation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """finalize() removes the reservation and writes a CostRecord to the JSONL log."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "1.00")
+        log = tmp_path / ".cost_log.jsonl"
+        run_id = "finalize-test-001"
+        reserve(run_id, 0.05, log_path=log)
+        assert run_id in _reservations
+
+        rec = _make_record(total_cost_usd=0.03, run_id=run_id)
+        finalize(run_id, rec, log_path=log)
+
+        # Reservation must be gone
+        assert run_id not in _reservations
+        # Actual record must be in the log
+        lines = log.read_text().splitlines()
+        assert len(lines) == 1
+        parsed = json.loads(lines[0])
+        assert parsed["run_id"] == run_id
+        assert parsed["total_cost_usd"] == pytest.approx(0.03)
+        # daily_spent now reflects the actual record (0.03), not the estimate (0.05)
+        assert daily_spent(log) == pytest.approx(0.03)
+
+    def test_finalize_without_prior_reserve_still_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """finalize() on an unknown run_id logs a warning but still persists the record."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "1.00")
+        log = tmp_path / ".cost_log.jsonl"
+        rec = _make_record(total_cost_usd=0.02, run_id="no-reservation")
+        # Must not raise, even without a prior reserve()
+        finalize("no-reservation", rec, log_path=log)
+        lines = log.read_text().splitlines()
+        assert len(lines) == 1
+
+    def test_release_reservation_removes_slot(self, tmp_path: Path) -> None:
+        """_release_reservation removes the in-memory slot without writing any record."""
+        log = tmp_path / ".cost_log.jsonl"
+        _reservations["manual-run"] = 0.10
+        _release_reservation("manual-run")
+        assert "manual-run" not in _reservations
+        # No file created
+        assert not log.exists()
+
+    def test_release_reservation_idempotent(self) -> None:
+        """_release_reservation on a non-existent run_id does not raise."""
+        # Should be a no-op / log debug only
+        _release_reservation("nonexistent-run-xyz")
+
+    def test_aborted_run_releases_reservation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After a failed run that calls _release_reservation in finally, budget is freed."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.10")
+        log = tmp_path / ".cost_log.jsonl"
+        run_id = "abort-run-001"
+        reserve(run_id, 0.08, log_path=log)
+        # Simulate aborted run: release reservation (budget should be free again)
+        _release_reservation(run_id)
+        # Now a new run with the same estimate must pass
+        new_id = "new-run-after-abort"
+        reserve(new_id, 0.08, log_path=log)
+        assert new_id in _reservations
+        _release_reservation(new_id)
+
+
+class TestConcurrentReservationProtocol:
+    """Deterministic concurrency tests for the reserve/finalize protocol.
+
+    Budget is set tight enough for exactly one of two concurrent requests.
+    With the reservation protocol, the outcome is deterministic: exactly one
+    thread claims the slot; the other sees it claimed and raises BudgetExceededError.
+    No timing dependence — the guarantee comes from the atomic lock in reserve(),
+    not from thread scheduling luck.
+    """
+
+    def test_exactly_one_of_two_concurrent_reserves_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With budget tight for one, exactly one concurrent reserve() succeeds."""
         monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.05")
         log = tmp_path / ".cost_log.jsonl"
 
         results: list[str] = []
+        reserved_ids: list[str] = []
+        # Barrier ensures both threads attempt reserve() simultaneously.
         barrier = threading.Barrier(2)
 
-        def _try_spend() -> None:
-            barrier.wait()  # both threads race to check_budget simultaneously
+        def _try_reserve() -> None:
+            run_id = new_run_id()
+            barrier.wait()
             try:
-                check_budget(estimated_cost_usd=0.04, log_path=log)
-                # Immediately record spend so the second thread sees it.
-                rec = CostRecord(
-                    run_id=new_run_id(),
-                    timestamp_utc=datetime.now(UTC).isoformat(),
-                    fixture_or_file="test.pdf",
-                    total_cost_usd=0.04,
-                    parse_cost_usd=0.04,
-                    explain_cost_usd=0.0,
-                    embed_cost_usd=0.0,
-                    duration_s=0.1,
-                )
-                record_run(rec, log_path=log)
+                reserve(run_id, 0.04, log_path=log)
                 results.append("ok")
+                reserved_ids.append(run_id)
             except BudgetExceededError:
                 results.append("blocked")
 
-        t1 = threading.Thread(target=_try_spend)
-        t2 = threading.Thread(target=_try_spend)
+        t1 = threading.Thread(target=_try_reserve)
+        t2 = threading.Thread(target=_try_reserve)
         t1.start()
         t2.start()
         t1.join()
         t2.join()
 
-        assert len(results) == 2
-        # At least one thread must have been blocked — the budget was too tight for both.
-        # (Both passing would mean TOCTOU was not prevented.)
-        assert results.count("ok") <= 1, (
-            f"Both threads passed the budget check — TOCTOU protection may be broken: {results}"
+        # Deterministic: exactly one succeeds, exactly one is blocked.
+        assert sorted(results) == ["blocked", "ok"], (
+            f"Expected exactly one ok and one blocked, got: {results}"
         )
+        # Clean up the surviving reservation
+        for rid in reserved_ids:
+            _release_reservation(rid)
+
+    def test_both_pass_when_budget_fits_both(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When budget is large enough for both, both concurrent reserves succeed."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "1.00")
+        log = tmp_path / ".cost_log.jsonl"
+
+        results: list[str] = []
+        reserved_ids: list[str] = []
+        barrier = threading.Barrier(2)
+
+        def _try_reserve() -> None:
+            run_id = new_run_id()
+            barrier.wait()
+            try:
+                reserve(run_id, 0.04, log_path=log)
+                results.append("ok")
+                reserved_ids.append(run_id)
+            except BudgetExceededError:
+                results.append("blocked")
+
+        t1 = threading.Thread(target=_try_reserve)
+        t2 = threading.Thread(target=_try_reserve)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results == ["ok", "ok"] or results == ["ok", "ok"], (
+            f"Both should have passed with a large budget, got: {results}"
+        )
+        for rid in reserved_ids:
+            _release_reservation(rid)
+
+    def test_finalized_run_frees_budget_for_next(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After finalize(), the slot is freed so a subsequent request can pass."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "0.06")
+        log = tmp_path / ".cost_log.jsonl"
+        run_id_1 = "seq-run-001"
+        run_id_2 = "seq-run-002"
+
+        # First run: reserve and finalize with actual cost well below budget
+        reserve(run_id_1, 0.04, log_path=log)
+        rec1 = _make_record(total_cost_usd=0.02, run_id=run_id_1)
+        finalize(run_id_1, rec1, log_path=log)
+
+        # After finalize, 0.02 is committed; budget remaining = 0.04 → second run fits
+        reserve(run_id_2, 0.03, log_path=log)
+        assert run_id_2 in _reservations
+        _release_reservation(run_id_2)
+
+    def test_reservation_does_not_double_count_after_finalize(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After finalize(), daily_spent reflects actual cost, not estimate + actual."""
+        monkeypatch.setenv("DAILY_API_BUDGET_USD", "1.00")
+        log = tmp_path / ".cost_log.jsonl"
+        run_id = "double-count-test"
+
+        reserve(run_id, 0.10, log_path=log)
+        rec = _make_record(total_cost_usd=0.07, run_id=run_id)
+        finalize(run_id, rec, log_path=log)
+
+        # Must equal the actual 0.07, not 0.10 (estimate) + 0.07 (actual) = 0.17
+        assert daily_spent(log) == pytest.approx(0.07)

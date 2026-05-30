@@ -89,7 +89,10 @@ def test_parser_infra_failure_raises_pipeline_infrastructure_error(
     monkeypatch.setattr(
         "src.pipeline.record_run", lambda r: cost_log.write_text(json.dumps(r.__dict__) + "\n")
     )
-    monkeypatch.setattr("src.pipeline.check_budget", lambda **_: None)
+    # Patch reserve() so the test does not need a real budget log; also patch
+    # _release_reservation so the finally block is a no-op in this test context.
+    monkeypatch.setattr("src.pipeline.reserve", lambda run_id, cost: None)
+    monkeypatch.setattr("src.pipeline._release_reservation", lambda run_id: None)
 
     pipeline = _build_pipeline_with_mocks()
 
@@ -111,7 +114,10 @@ def test_failed_run_persists_cost_record(
         cost_log.write_text(json.dumps(record.__dict__) + "\n")
 
     monkeypatch.setattr("src.pipeline.record_run", _capture)
-    monkeypatch.setattr("src.pipeline.check_budget", lambda **_: None)
+    # Patch reserve() / _release_reservation so the test does not need a real
+    # budget log and the finally block remains a no-op.
+    monkeypatch.setattr("src.pipeline.reserve", lambda run_id, cost: None)
+    monkeypatch.setattr("src.pipeline._release_reservation", lambda run_id: None)
 
     pipeline = _build_pipeline_with_mocks()
 
@@ -134,7 +140,10 @@ def test_extract_failure_still_persists_cost_record(
     """
     persisted: list[dict[str, Any]] = []
     monkeypatch.setattr("src.pipeline.record_run", lambda r: persisted.append(r.__dict__))
-    monkeypatch.setattr("src.pipeline.check_budget", lambda **_: None)
+    # Patch reserve() / _release_reservation so the test does not need a real
+    # budget log and the finally block remains a no-op.
+    monkeypatch.setattr("src.pipeline.reserve", lambda run_id, cost: None)
+    monkeypatch.setattr("src.pipeline._release_reservation", lambda run_id: None)
     monkeypatch.setattr(
         "src.pipeline.extract_text", MagicMock(side_effect=ISPVDataMissingError("simulated"))
     )
