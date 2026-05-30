@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _CHUNK_SIZE = 64 * 1024  # 64 KB streaming chunks
 _WEB_INDEX = Path(__file__).parent / "web" / "index.html"
+_WEB_PRIVACY = Path(__file__).parent / "web" / "privacy.html"
 
 # Per-IP rate limiter (process-local). Complements the per-day budget guard in
 # src.cost_tracker: the budget caps total daily spend, this caps how fast one
@@ -160,6 +161,12 @@ def _build_pipeline() -> Pipeline:
 def index() -> HTMLResponse:
     """Serve the single-page web frontend."""
     return HTMLResponse(content=_WEB_INDEX.read_text(encoding="utf-8"))
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy() -> HTMLResponse:
+    """Serve the GDPR privacy policy page."""
+    return HTMLResponse(content=_WEB_PRIVACY.read_text(encoding="utf-8"))
 
 
 @app.get("/health")
