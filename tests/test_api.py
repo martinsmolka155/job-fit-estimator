@@ -50,6 +50,49 @@ def _make_pipeline_result(**meta_overrides: Any) -> MagicMock:
     return result
 
 
+def test_honeypot_filled_returns_400_without_pipeline(client: TestClient) -> None:
+    """A bot filling the hidden company_url field is rejected before the pipeline."""
+    with patch("api._build_pipeline") as build:
+        response = client.post(
+            "/analyze",
+            files={"cv": ("cv.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+            data={"company_url": "http://spam.example"},
+        )
+    assert response.status_code == 400
+    build.assert_not_called()  # never reached the cost-bearing pipeline
+
+
+def test_honeypot_empty_passes_through(client: TestClient) -> None:
+    """Empty honeypot (real user) does not block the request."""
+    response = client.post(
+        "/analyze",
+        files={"cv": ("cv.txt", io.BytesIO(b"x"), "text/plain")},
+        data={"company_url": ""},
+    )
+    # Rejected for the unsupported extension, NOT the honeypot — proves it passed.
+    assert response.status_code == 415
+
+
+def test_turnstile_enabled_missing_token_returns_403(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Turnstile is configured, a request without a token is refused."""
+    monkeypatch.setattr(api.settings, "turnstile_secret_key", "test-secret")
+    response = client.post(
+        "/analyze",
+        files={"cv": ("cv.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+        data={"cf_turnstile_response": ""},
+    )
+    assert response.status_code == 403
+
+
+def test_turnstile_disabled_skips_verification(client: TestClient) -> None:
+    """With no secret key, Turnstile is a no-op (default state)."""
+    assert api.settings.turnstile_secret_key == ""
+    response = _upload(client, ".docx")  # rejected later for fake content, not 403
+    assert response.status_code != 403
+
+
 def test_index_returns_html(client: TestClient) -> None:
     response = client.get("/")
     assert response.status_code == 200

@@ -24,5 +24,11 @@ class Settings(BaseSettings):
     rate_limit_max_requests: int = 5
     rate_limit_window_seconds: int = 3600
 
+    # Cloudflare Turnstile bot challenge. Both empty = disabled (the form skips
+    # the widget and the server skips verification), so local/keyless runs work.
+    # Set both in .env to activate on the public deploy.
+    turnstile_site_key: str = ""
+    turnstile_secret_key: str = ""
+
 
 settings = Settings()

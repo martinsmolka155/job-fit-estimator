@@ -19,7 +19,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
 from src.config import settings
@@ -157,10 +158,47 @@ def _build_pipeline() -> Pipeline:
     )
 
 
+_TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+async def _verify_turnstile(token: str, client_ip: str) -> bool:
+    """Verify a Cloudflare Turnstile token server-side.
+
+    Returns True when the challenge passes OR when Turnstile is disabled (no
+    secret configured). A missing token while Turnstile IS enabled is a fail.
+    Network/Cloudflare errors fail closed (return False) so a broken verifier
+    cannot silently disable bot protection.
+    """
+    if not settings.turnstile_secret_key:
+        return True  # disabled — keyless local/dev runs
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            resp = await http.post(
+                _TURNSTILE_VERIFY_URL,
+                data={
+                    "secret": settings.turnstile_secret_key,
+                    "response": token,
+                    "remoteip": client_ip,
+                },
+            )
+        return bool(resp.json().get("success", False))
+    except (httpx.HTTPError, ValueError):
+        logger.warning("Turnstile verification request failed; rejecting")
+        return False
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    """Serve the single-page web frontend."""
-    return HTMLResponse(content=_WEB_INDEX.read_text(encoding="utf-8"))
+    """Serve the single-page web frontend.
+
+    The Turnstile site key is injected into the page (replacing the placeholder)
+    so the widget only renders when a key is configured.
+    """
+    html = _WEB_INDEX.read_text(encoding="utf-8")
+    html = html.replace("__TURNSTILE_SITE_KEY__", settings.turnstile_site_key)
+    return HTMLResponse(content=html)
 
 
 @app.get("/privacy", response_class=HTMLResponse)
@@ -176,18 +214,39 @@ def health() -> dict[str, str]:
 
 
 @app.post("/analyze")
-async def analyze(request: Request, cv: UploadFile = File(...)) -> dict[str, Any]:  # noqa: B008
+async def analyze(  # noqa: B008
+    request: Request,
+    cv: UploadFile = File(...),
+    company_url: str = Form(""),
+    cf_turnstile_response: str = Form(""),
+) -> dict[str, Any]:
     """Analyze a CV (PDF or DOCX) and return the structured pipeline result."""
+    client_ip = _client_ip(request)
+
     # Rate-limit first: reject abusive clients before touching the upload body
     # or the (cost-bearing) pipeline.
     try:
-        rate_limiter.check(_client_ip(request))
+        rate_limiter.check(client_ip)
     except RateLimitExceeded as e:
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Please try again later.",
             headers={"Retry-After": str(e.retry_after_seconds)},
         ) from e
+
+    # Honeypot: the hidden company_url field is invisible to humans. Anything in
+    # it means a bot filled the form — reject before the upload/pipeline cost.
+    # Generic 400 gives no "you tripped the honeypot" signal.
+    if company_url.strip():
+        logger.info("honeypot tripped from %s — rejecting", client_ip)
+        raise HTTPException(status_code=400, detail="Neplatný požadavek.")
+
+    # Cloudflare Turnstile (no-op when no secret configured).
+    if not await _verify_turnstile(cf_turnstile_response, client_ip):
+        raise HTTPException(
+            status_code=403,
+            detail="Ověření, že nejsi robot, se nezdařilo. Načti stránku znovu a zkus to.",
+        )
 
     filename = cv.filename or "upload"
     suffix = Path(filename).suffix.lower()

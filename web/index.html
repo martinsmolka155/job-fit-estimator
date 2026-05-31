@@ -1168,6 +1168,17 @@
           <span>CV se nikam neukládá — zpracuje se a&nbsp;hned smaže. Text jde do&nbsp;OpenAI; netrénuje se na&nbsp;něm.</span>
         </div>
 
+        <!-- Honeypot: hidden from humans, bots fill it → request rejected server-side.
+             Not display:none (some bots skip those); pushed off-canvas + aria-hidden. -->
+        <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;">
+          <label for="company-url">Company URL (leave empty)</label>
+          <input type="text" id="company-url" name="company_url" value="" tabindex="-1" autocomplete="off" />
+        </div>
+
+        <!-- Cloudflare Turnstile — rendered only when a site key is injected by the
+             server (api.py index()); inert no-op otherwise so local/keyless runs work. -->
+        <div id="turnstile-box" style="margin:14px 0;"></div>
+
         <button class="submit-btn" id="submit-btn" type="button" disabled>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M2 8h12M9 4l5 4-5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1413,6 +1424,31 @@
     let selectedFile = null;
     let abortController = null;
 
+    /* ── Cloudflare Turnstile (optional — active only when a site key is set) ── */
+    const TURNSTILE_KEY = document.body.dataset.turnstileKey || "";
+    const turnstileEnabled = TURNSTILE_KEY && TURNSTILE_KEY !== "__TURNSTILE_SITE_KEY__";
+    let turnstileToken = "";
+    let turnstileWidgetId = null;
+
+    if (turnstileEnabled) {
+      // Load the Turnstile script and render an explicit widget once ready.
+      window.onTurnstileLoad = function () {
+        const box = document.getElementById("turnstile-box");
+        if (!box || !window.turnstile) return;
+        turnstileWidgetId = window.turnstile.render(box, {
+          sitekey: TURNSTILE_KEY,
+          callback: (token) => { turnstileToken = token; },
+          "expired-callback": () => { turnstileToken = ""; },
+          "error-callback": () => { turnstileToken = ""; },
+        });
+      };
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad";
+      s.async = true;
+      s.defer = true;
+      document.head.appendChild(s);
+    }
+
     /* ── DOM refs ─────────────────────────────────────────────────────────── */
 
     const dropzone       = document.getElementById("dropzone");
@@ -1589,6 +1625,11 @@
 
       const formData = new FormData();
       formData.append("cv", file);
+      // Honeypot stays empty for real users; the field is submitted so the
+      // server sees it. Turnstile token only when the challenge is active.
+      const hp = document.getElementById("company-url");
+      formData.append("company_url", hp ? hp.value : "");
+      if (turnstileEnabled) formData.append("cf_turnstile_response", turnstileToken);
 
       let res;
       try {
