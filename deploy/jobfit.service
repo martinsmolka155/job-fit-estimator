@@ -1,0 +1,25 @@
+[Unit]
+Description=Job Fit & Salary Estimator (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=lilith
+Group=lilith
+WorkingDirectory=/opt/jobfit
+EnvironmentFile=/opt/jobfit/.env
+# Single worker: the pipeline offloads its sync work via asyncio.to_thread,
+# and the per-process rate limiter + daily budget guard assume one process.
+# nginx (limit_req) provides the cross-client edge limit.
+ExecStart=/opt/jobfit/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8099
+Restart=always
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jobfit
+
+[Install]
+WantedBy=multi-user.target
