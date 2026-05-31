@@ -214,11 +214,11 @@ def health() -> dict[str, str]:
 
 
 @app.post("/analyze")
-async def analyze(  # noqa: B008
+async def analyze(
     request: Request,
-    cv: UploadFile = File(...),
-    company_url: str = Form(""),
-    cf_turnstile_response: str = Form(""),
+    cv: UploadFile = File(...),  # noqa: B008
+    company_url: str = Form(""),  # noqa: B008
+    cf_turnstile_response: str = Form(""),  # noqa: B008
 ) -> dict[str, Any]:
     """Analyze a CV (PDF or DOCX) and return the structured pipeline result."""
     client_ip = _client_ip(request)
