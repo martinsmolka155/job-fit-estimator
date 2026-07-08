@@ -1,6 +1,6 @@
 # Job Fit & Salary Estimator
 
-End-to-end Python pipeline. Vstup: CV (PDF/DOCX). Výstup: skóre seniority 0–100, odhad měsíční hrubé mzdy v CZK a 3 doporučení, jak ji posunout o ≥30 %.
+End-to-end Python pipeline. Vstup: CV (PDF/DOCX). Výstup: skóre seniority 0–100, odhad měsíční hrubé mzdy v CZK a 3 doporučení, jak ji posunout výš (každé s poctivým tier + range dopadem).
 
 ## Spuštění (1–2 příkazy)
 
@@ -31,8 +31,8 @@ docker compose up                                   # Streamlit v kontejneru
     "strengths": [...],
     "gaps": [...],
     "recommendations": [
-      { "title": "...", "estimated_salary_impact_pct": 12, "timeframe_months": 6, "first_action": "...", ... },
-      { ... }, { ... }   // sum ≥ 30 % je vynucený
+      { "title": "...", "impact_tier": "medium", "impact_range_pct": { "low_pct": 8, "high_pct": 15 }, "timeframe_months": 6, "first_action": "...", ... },
+      { ... }, { ... }   // právě 3 doporučení; dopad jako tier + range, žádný umělý součet
     ]
   },
   "validation_flags": [...],   // hallucination guard
@@ -49,7 +49,7 @@ CV (PDF/DOCX)
   ↓ [3] Validator       Substring guard (lowercase + bez diakritiky) → ValidationFlags
   ↓ [4] Scorer          Rule-based, 5 vážených komponentů, žádné ML black-box
   ↓ [5] Estimator       ISPV decile bands → region × management × inflation
-  ↓ [6] LLM Explainer   3 doporučení (sum impact ≥30 %), CZ output, grounded v CV
+  ↓ [6] LLM Explainer   3 doporučení (impact tier + range), CZ output, grounded v CV
 PipelineResult
 ```
 
